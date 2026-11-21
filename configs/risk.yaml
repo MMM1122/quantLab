@@ -1,0 +1,9 @@
+# Paper-trading risk rules (enforced BEFORE an order is created).
+max_position_weight: 0.25     # max 25% of NAV per asset after the order
+allow_short: false            # cannot be enabled in V1
+allow_margin: false           # cannot be enabled in V1
+max_data_staleness_sessions: 0  # latest bar must be from the current replay session
+participation_rate: 0.10      # max fraction of a session's volume one order may fill (partial fills beyond)
+commission_bps: 1.0
+min_commission: 0.0
+slippage_bps: 2.0

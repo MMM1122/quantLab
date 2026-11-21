@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# Secrets
+.env
+*.key
+secrets*
+
+# Generated datasets, databases and run artifacts (never commit)
+/data/
+*.db
+*.db-wal
+*.db-shm
+*.parquet
+reports_out/
+exports/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/

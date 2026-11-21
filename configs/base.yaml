@@ -1,0 +1,20 @@
+# QuantLab base configuration (V1). Values here are defaults; CLI/API/UI parameters override per run.
+universe: [SPY, QQQ, IWM, TLT, GLD]
+benchmark: SPY
+base_currency: USD
+calendar: XNYS
+
+backtest:
+  initial_cash: 10000
+  commission_bps: 1.0        # per-side commission, basis points of traded notional
+  min_commission: 0.0        # USD floor per fill
+  slippage_bps: 2.0          # adverse fill adjustment vs. next-session open (assumption)
+  price_mode: raw_with_dividends   # or adjusted_total_return
+  risk_free_rate: 0.0        # annual, used for Sharpe (daily sample, 252 sessions/yr)
+  max_weight: 1.0            # backtests allow 100% in one ETF; paper trading uses risk.yaml
+
+quality:
+  missing_fraction_error: 0.02   # >2% missing sessions => ERROR (blocks backtests)
+  extreme_return_threshold: 0.25 # |daily return| above this is flagged (WARN), never deleted
+  stale_sessions_warn: 5         # last bar older than N sessions vs requested end => WARN
+  flatline_sessions_warn: 5      # N identical consecutive closes => WARN
