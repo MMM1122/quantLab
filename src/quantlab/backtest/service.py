@@ -67,6 +67,8 @@ def run_and_store(
     if not syms:
         raise InputValidationError("at least one symbol is required")
     snap = require_tradable_snapshot(ctx.snapshots, sid)
+    if (snap.parameters or {}).get("asset_class") == "fx":
+        raise InputValidationError("FX snapshots are for currency reporting only, not for backtests")
     missing = [s for s in syms if s not in snap.symbols]
     if missing:
         raise InputValidationError(f"symbols {missing} not in snapshot {snap.id} ({snap.symbols})")
@@ -191,6 +193,52 @@ def load_artifact(ctx: AppContext, run_id: str, name: str) -> pd.DataFrame:
     if not p.exists():
         raise NotFoundError(f"artifact {name} not found for run {run_id}")
     return pd.read_parquet(p)
+
+
+RETURN_ONLY_KEYS = ("start", "end", "n_sessions", "years", "initial_nav", "final_nav", "total_return", "cagr",
+                    "annual_volatility", "sharpe", "sharpe_se", "sharpe_ci95_low", "sharpe_ci95_high", "sortino",
+                    "max_drawdown", "max_drawdown_peak", "max_drawdown_trough", "max_drawdown_duration_sessions",
+                    "calmar", "time_in_market", "risk_free_rate", "periods_per_year")
+
+
+def metrics_in_currency(ctx: AppContext, run_id: str, currency: str = "USD") -> dict[str, Any]:
+    """Return-based metrics of a stored run in USD or CAD (unhedged CAD investor view).
+
+    Cost, turnover and dividend fields are USD cash amounts and are only reported in USD."""
+    from quantlab.data.fx import fx_series, latest_fx_snapshot, to_cad
+
+    cur = currency.upper()
+    if cur not in ("USD", "CAD"):
+        raise InputValidationError("currency must be USD or CAD")
+    run = get_run(ctx, run_id)
+    if run["status"] != RunStatus.COMPLETED.value:
+        raise InputValidationError(f"run {run_id} is {run['status']}")
+    res = run["result"]
+    if cur == "USD":
+        return {"currency": "USD", "metrics": res["metrics"], "fx": None}
+    net = res["metrics"]["net"]
+    fx_snap = latest_fx_snapshot(ctx, synthetic=bool(res["is_synthetic"]), start=net["start"], end=net["end"])
+    rate = fx_series(ctx, fx_snap.id)
+    rf = res["config"]["risk_free_rate"]
+    out: dict[str, Any] = {}
+    curves: dict[str, pd.Series] = {}
+    info = {}
+    for name, artifact in (("net", "equity"), ("gross", "equity_gross"), ("benchmark", "benchmark_equity")):
+        try:
+            eq = load_artifact(ctx, run_id, artifact).set_index("session")
+        except NotFoundError:
+            continue
+        cad, info = to_cad(eq["nav"], rate)
+        curves[name] = cad
+        m = performance_metrics(eq.assign(nav=cad), None, None, rf)
+        out[name] = {k: m[k] for k in RETURN_ONLY_KEYS}
+    if "benchmark" in curves:
+        out["relative"] = relative_metrics(curves["net"], curves["benchmark"])
+    return clean_for_json({"currency": "CAD", "metrics": out,
+                           "fx": {"snapshot_id": fx_snap.id, "dataset_hash": fx_snap.dataset_hash,
+                                  "provider": fx_snap.provider, "pair": "USDCAD (CAD per USD)", **info},
+                           "note": "Unhedged CAD view: NAV_CAD = NAV_USD x USDCAD. Trading and costs remain in USD.",
+                           "_curves": curves})
 
 
 def compare_runs(ctx: AppContext, run_ids: list[str], n_trials: int | None = None, seed: int = 0,

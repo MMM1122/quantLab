@@ -594,6 +594,20 @@ class PaperBroker:
             df[c] = df[c].astype(float)
         return df
 
+    def nav_history_cad(self, account_id: str) -> tuple[pd.DataFrame, dict[str, Any]]:
+        """NAV history converted to CAD (unhedged view) with FX of the same realness as the replay data."""
+        from quantlab.data.fx import fx_series, latest_fx_snapshot, to_cad
+
+        acc = self._account_row(account_id)
+        mkt = self._market(acc["snapshot_id"])
+        hist = self.nav_history(account_id)
+        fx_snap = latest_fx_snapshot(self.ctx, synthetic=mkt.is_synthetic, start=hist["session_date"].iloc[0],
+                                     end=hist["session_date"].iloc[-1])
+        nav = hist.set_index(pd.to_datetime(hist["session_date"]))["nav"]
+        cad, info = to_cad(nav, fx_series(self.ctx, fx_snap.id))
+        out = hist.assign(nav_cad=cad.to_numpy())
+        return out, {"fx_snapshot_id": fx_snap.id, "pair": "USDCAD (CAD per USD)", **info}
+
     def risk_events(self, account_id: str | None = None) -> list[dict[str, Any]]:
         if account_id:
             aid = self._account_row(account_id)["id"]

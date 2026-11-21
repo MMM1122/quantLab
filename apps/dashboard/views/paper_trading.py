@@ -58,6 +58,12 @@ c[3].metric("Cash (USD)", f"{Decimal(state['cash']):,.2f}")
 c[4].metric("Positions (USD)", f"{Decimal(state['positions_value']):,.2f}")
 c[5].metric("Kill switch", "ON" if state["kill_switch"] else "off")
 st.caption(f"Risk limits: {state['risk_limits']} · no shorting · no margin · stale-data orders rejected")
+try:
+    _cad_hist, _cad_info = broker.nav_history_cad(aid)
+    st.caption(f"NAV in CAD (unhedged view, USDCAD as of the replay session): "
+               f"{_cad_hist['nav_cad'].iloc[-1]:,.2f} CAD")
+except QuantLabError:
+    pass
 
 left, right = st.columns([1, 1])
 with left:

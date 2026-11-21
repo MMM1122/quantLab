@@ -5,6 +5,7 @@ import streamlit as st
 
 from quantlab.core.errors import QuantLabError
 from quantlab.core.labels import data_label
+from quantlab.data.fx import ingest_fx, is_fx_snapshot
 from quantlab.data.ingestion import ingest
 from quantlab.data.providers import YF_TERMS_WARNING, YFinanceProvider, get_provider
 from quantlab.data.refresh import lineage, refresh_snapshot
@@ -37,10 +38,24 @@ with st.expander("Ingest data", expanded=not ctx.snapshots.list()):
         except QuantLabError as exc:
             st.error(f"Ingest failed — no snapshot created and no trading action taken: {exc}")
 
-snap = snapshot_selector(ctx, "mx_snap", include_derived=True)
+with st.expander("Ingest USDCAD FX (for CAD reporting)"):
+    with st.form("fx_ingest"):
+        c1, c2, c3 = st.columns(3)
+        fx_src = c1.radio("Source", ["yfinance", "synthetic"], horizontal=True)
+        fx_start = c2.date_input("FX start", date(2015, 1, 1), min_value=date(1995, 1, 1))
+        fx_end = c3.date_input("FX end", date.today() if fx_src == "yfinance" else date(2025, 12, 31))
+        fx_go = st.form_submit_button("Ingest FX")
+    if fx_go:
+        try:
+            fsnap, frep, _ = ingest_fx(ctx, str(fx_start), str(fx_end), synthetic=fx_src == "synthetic")
+            st.success(f"FX snapshot {fsnap.id[:8]} ({fsnap.start}→{fsnap.end}) quality {frep.status}")
+        except QuantLabError as exc:
+            st.error(f"FX ingest failed: {exc}")
+
+snap = snapshot_selector(ctx, "mx_snap", include_derived=True, include_fx=True)
 if snap is None:
     st.stop()
-if not snap.is_synthetic and snap.parent_id is None:
+if not snap.is_synthetic and snap.parent_id is None and not is_fx_snapshot(snap):
     if st.button("Refresh from provider (new snapshot + revision check)"):
         try:
             with st.spinner("Re-downloading full history…"):

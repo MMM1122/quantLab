@@ -111,7 +111,7 @@ def diff_snapshots(old: pd.DataFrame, new: pd.DataFrame, sample: int = 10) -> di
 
 def latest_real_snapshot(ctx: AppContext):
     for s in ctx.snapshots.list(include_derived=False):
-        if not s.is_synthetic:
+        if not s.is_synthetic and (s.parameters or {}).get("asset_class") != "fx":
             return s
     raise NotFoundError("no real-data snapshot to refresh; run `quantlab data ingest` first")
 
@@ -119,6 +119,8 @@ def latest_real_snapshot(ctx: AppContext):
 def refresh_snapshot(ctx: AppContext, base_snapshot_id: str, provider: MarketDataProvider,
                      end: str | None = None) -> RefreshResult:
     base = latest_real_snapshot(ctx) if base_snapshot_id == "latest" else ctx.snapshots.get(base_snapshot_id)
+    if (base.parameters or {}).get("asset_class") == "fx":
+        raise InputValidationError("refresh FX with `quantlab data ingest-fx` (FX snapshots are re-ingested)")
     if base.is_synthetic or base.parent_id:
         raise InputValidationError("only real, non-derived snapshots can be refreshed (synthetic fixtures are "
                                    "regenerated, derived snapshots are immutable experiment inputs)")

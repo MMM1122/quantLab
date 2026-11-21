@@ -17,11 +17,13 @@ Errors: `{"error": <type>, "detail": <message>}` with 422 (invalid input), 404 (
 | POST | `/data/ingest` | `{symbols, start, end?, provider: yfinance|synthetic, seed}` → 202 + job id |
 | POST | `/data/refresh` | `{snapshot_id: <id>|latest, end?}` → 202; new snapshot + revision diff |
 | GET | `/data/lineage?snapshot_id=` | refresh history with diff totals |
+| POST | `/data/fx/ingest` | `{start, end?, provider: yfinance|synthetic}` → 202; USDCAD snapshot |
 | GET | `/data/snapshots` | includes `quality_status`, `data_label` |
 | GET | `/data/quality/{snapshot_id}` | stored issues |
 | GET | `/strategies` | ids, params, warm-up, versions |
 | POST | `/backtests` | `{strategy, snapshot_id, symbols, start?, end?, capital, commission_bps, slippage_bps, price_mode, params, mode, seed}` → 202 + job id; `mode=LIVE` → 403 |
 | GET | `/backtests`, `/backtests/{id}`, `/backtests/{id}/trades` | stored results only |
+| GET | `/backtests/{id}/metrics?currency=USD|CAD` | return metrics in USD or unhedged CAD |
 | GET | `/backtests/compare?run_ids=a,b[,c]&n_trials=` | Sharpe-difference tests vs first run + deflated Sharpe |
 | POST | `/experiments/dq-001` | → 202 + job id + experiment id |
 | POST | `/experiments/walk-forward` | `{snapshot_id, strategy, symbols, param_grid, train_sessions, test_sessions, embargo_sessions, expanding, objective}` → 202 |

@@ -61,6 +61,13 @@ class RefreshRequest(BaseModel):
     end: str | None = None
 
 
+class FXIngestRequest(BaseModel):
+    start: str
+    end: str | None = None
+    provider: Literal["yfinance", "synthetic"] = "synthetic"
+    seed: int = 7
+
+
 class DQ001Request(BaseModel):
     snapshot_id: str
     symbol: str = "SPY"
@@ -251,6 +258,18 @@ def create_app(data_dir: str | None = None, ctx: AppContext | None = None, api_t
 
         return envelope(lineage(ctx, snapshot_id), mode="RESEARCH")
 
+    @app.post("/data/fx/ingest", status_code=202)
+    def fx_ingest(req: FXIngestRequest):
+        from quantlab.data.fx import ingest_fx
+
+        validate_date_range(req.start, req.end, allow_future=req.provider == "synthetic")
+
+        def work():
+            return ingest_fx(ctx, req.start, req.end, synthetic=req.provider == "synthetic", seed=req.seed)[0].id
+
+        jid = jobs.submit("data.ingest_fx", req.model_dump(), work)
+        return envelope({"job_id": jid, "status": "PENDING"}, mode="RESEARCH", source=req.provider)
+
     @app.get("/data/snapshots")
     def snapshots():
         data = []
@@ -317,6 +336,14 @@ def create_app(data_dir: str | None = None, ctx: AppContext | None = None, api_t
             mode="BACKTEST", run_id=r["id"], label=BACKTEST_LABEL,
             data_label=res.get("data_label"), assumptions=res.get("assumptions"),
         )
+
+    @app.get("/backtests/{run_id}/metrics")
+    def backtest_metrics(run_id: str, currency: str = "USD"):
+        from quantlab.backtest.service import metrics_in_currency
+
+        out = metrics_in_currency(ctx, run_id, currency)
+        out.pop("_curves", None)
+        return envelope(out, mode="BACKTEST", run_id=run_id, label=BACKTEST_LABEL)
 
     @app.get("/backtests/{run_id}/trades")
     def backtest_trades(run_id: str):

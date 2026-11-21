@@ -23,7 +23,9 @@
 * Dividends credited on the ex-date (pay date ignored) and held as cash (not reinvested).
 * Yahoo prices are split-adjusted retroactively; true as-traded prices are not available from it.
 * ETF-only universe reduces but does not remove survivorship/selection bias.
-* No taxes, borrow, FX (USD only; CAD conversion is future work), or account fees.
+* No taxes, borrow or account fees. Trading and costs are in USD; CAD is a reporting view only
+  (NAV_CAD = NAV_USD × USDCAD at the session's rate, previous rate for ≤ 5 sessions; no FX conversion
+  costs, no hedging). Cost/turnover/dividend amounts are not converted.
 * Sharpe CI uses an iid approximation; DQ-001 uses few seeds → wide intervals.
 * Synthetic fixture = GBM with fat-tail shocks; it has no real market structure, so strategy
   results on it are meaningless as evidence of profitability.
