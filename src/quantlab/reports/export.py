@@ -159,3 +159,131 @@ td:first-child,th:first-child{{text-align:left}} pre{{white-space:pre-wrap;backg
 </head><body>{banner}<h1>{html.escape(r['strategy']['name'])} — {html.escape(', '.join(r['symbols']))}</h1>
 {fig.to_html(full_html=False, include_plotlyjs=True)}
 <h2>Metrics</h2>{table}<h2>Full report</h2>{body_md}</body></html>"""
+
+
+# ------------------------------------------------------------------ experiments (DQ-001)
+AGG_COLS = [
+    ("strategy", "strategy", None), ("scenario", "scenario", None), ("policy", "policy", None),
+    ("n_seeds", "seeds", "int"), ("delta_total_return_mean", "Δ total return", "pct"),
+    ("delta_total_return_ci_low", "CI low", "pct"), ("delta_total_return_ci_high", "CI high", "pct"),
+    ("delta_sharpe_mean", "Δ Sharpe", "num"), ("delta_max_drawdown_mean", "Δ max DD", "pct"),
+    ("n_trades_mean", "trades", "num"), ("missed_signals_mean", "missed", "num"),
+    ("spurious_signals_mean", "spurious", "num"), ("signal_agreement_mean", "agreement", "pct"),
+    ("refused_decisions_mean", "refused", "num"),
+]
+
+
+def experiment_table(aggregate: list[dict]) -> pd.DataFrame:
+    rows = []
+    for r in aggregate:
+        row = {}
+        for key, label, kind in AGG_COLS:
+            v = r.get(key)
+            row[label] = v if kind is None else fmt(v, kind)
+        if r.get("research_only"):
+            row["policy"] = f"{row['policy']} (research-only)"
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def experiment_markdown(exp: dict[str, Any]) -> str:
+    r = exp["results"]
+    cfg = r["design"]["config"]
+    lines = [f"# {r['code']} — data-quality experiment report", "", f"**{r['label']}**  "]
+    if r["is_synthetic"]:
+        lines.append(f"**{SYNTHETIC_LABEL}**  ")
+    lines += [f"_{NOT_ADVICE}_", "", "## Hypothesis", "", r["hypothesis"], "", "## Design", ""]
+    lines += [
+        f"- Experiment ID: `{r['experiment_id']}` · code version `{r['design'].get('code_version')}`",
+        f"- Source snapshot: `{r['design']['snapshot']['id']}` (hash `{r['design']['snapshot']['dataset_hash']}`), "
+        f"verified unchanged after the run: {r['source_snapshot_verified_unchanged']}",
+        f"- Symbol: {cfg['symbol']} · strategies: {', '.join(cfg['strategies'])}",
+        f"- Evaluation window: {r['evaluation_window'][0]} → {r['evaluation_window'][1]}",
+        f"- Seeds: {cfg['seeds']} · policies: {', '.join(cfg['policies'])}",
+        f"- Costs: commission {cfg['commission_bps']} bps, slippage {cfg['slippage_bps']} bps, "
+        f"capital {cfg['initial_cash']:,.0f} USD",
+        "- Scenarios: " + "; ".join(
+            f"{s['name']} (missing {s['missing_rate']:.0%}, delayed {s['delay_rate']:.0%} lag≤{s['delay_max_lag']}, "
+            f"corrupted {s['corrupt_rate']:.0%})" for s in cfg["scenarios"]),
+        f"- Backtests executed: {r['n_runs']} (+{len(r['baseline'])} clean baselines)",
+        "", "## Missing-data rules", "",
+    ]
+    lines += [f"- {x}" for x in r["design"]["missing_data_rules"]]
+    lines += ["", "## Clean baselines", ""]
+    for sid, b in r["baseline"].items():
+        m = b["metrics"]
+        ci = b.get("sharpe_bootstrap_ci95") or [None, None]
+        lines.append(f"- {sid}: total return {fmt(m['total_return'], 'pct')}, CAGR {fmt(m['cagr'], 'pct')}, "
+                     f"Sharpe {fmt(m['sharpe'], 'num')} (block-bootstrap 95% CI {fmt(ci[0], 'num')} … "
+                     f"{fmt(ci[1], 'num')}), max DD {fmt(m['max_drawdown'], 'pct')}, trades {b['n_trades']}")
+    if r.get("detection"):
+        det = pd.DataFrame(r["detection"]).groupby("scenario").sum(numeric_only=True).reset_index()
+        lines += ["", "## Did validation detect the injected problems?", "", df_to_markdown(det.drop(columns=["seed"]))]
+    lines += ["", "## Results (mean across seeds; Δ vs clean baseline; 95% Student-t CI)", "",
+              df_to_markdown(experiment_table(r["aggregate"]))]
+    lines += ["", "## Findings (generated from the numbers above)", ""] + [f"- {f}" for f in r["findings"]]
+    lines += ["", "## Limitations", "",
+              "- Results are specific to this snapshot, symbol, window and parameter set; they are not general claims.",
+              "- With few seeds, confidence intervals are wide; 'not distinguishable from zero' is the honest reading.",
+              "- Delays are modelled as a stale bar delivered for the session (value of t-k, as-of stamp t-k).",
+              "- Fills use pristine prices; real outages may also affect the ability to trade."]
+    if r["is_synthetic"]:
+        lines.append(f"- {SYNTHETIC_LABEL}: numbers describe the synthetic fixture, not real markets.")
+    return "\n".join(lines) + "\n"
+
+
+def experiment_html(exp: dict[str, Any]) -> str:
+    r = exp["results"]
+    agg = pd.DataFrame(r["aggregate"])
+    agg = agg[agg.scenario != "clean"].copy()
+    figs = []
+    for sid, g in agg.groupby("strategy", sort=False):
+        g = g.assign(err=(g["delta_total_return_ci_high"] - g["delta_total_return_mean"]).fillna(0) * 100,
+                     y=g["delta_total_return_mean"] * 100)
+        figs.append(charts.bar_compare(g, "scenario", "y", "policy", f"{sid}: Δ total return vs clean (pp, mean ± 95% CI)",
+                                       r["is_synthetic"], error_y="err").to_html(full_html=False, include_plotlyjs=not figs))
+    md = experiment_markdown(exp)
+    banner = f"<div class='banner'>{html.escape(r['label'])}"
+    if r["is_synthetic"]:
+        banner += f" · <b>{html.escape(SYNTHETIC_LABEL)}</b>"
+    banner += "</div>"
+    return f"""<!DOCTYPE html><html><head><meta charset='utf-8'><title>{r['code']} {r['experiment_id']}</title>
+<style>body{{font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;max-width:1100px;margin:24px auto;
+color:#222;background:#FAF8F4}} .banner{{background:#7A2E2E;color:#fff;padding:8px 12px;border-radius:4px}}
+pre{{white-space:pre-wrap;background:#fff;padding:12px}}</style></head><body>{banner}
+<h1>{r['code']} data-quality experiment</h1>{''.join(figs)}<pre>{html.escape(md)}</pre></body></html>"""
+
+
+def export_experiment(ctx: AppContext, experiment_id: str, fmt_: str, out_dir: str | Path | None = None) -> list[Path]:
+    from quantlab.research.dq_001 import experiment_runs, get_experiment
+
+    if fmt_ not in FORMATS:
+        raise InputValidationError(f"format must be one of {FORMATS}")
+    exp = get_experiment(ctx, experiment_id)
+    if exp["status"] != "COMPLETED":
+        raise InputValidationError(f"experiment {experiment_id} is {exp['status']}; nothing to export")
+    r = exp["results"]
+    out = Path(out_dir or ctx.settings.exports_dir) / f"experiment_{exp['id']}"
+    out.mkdir(parents=True, exist_ok=True)
+    tag = "SYNTHETIC_" if r["is_synthetic"] else ""
+    header = f"# {r['label']}" + (f" | {SYNTHETIC_LABEL}" if r["is_synthetic"] else "") + f" | {r['code']} {exp['id']}\n"
+    paths = []
+    if fmt_ == "json":
+        p = out / f"{tag}result.json"
+        p.write_text(json.dumps(r, indent=2, sort_keys=True))
+        paths.append(p)
+    elif fmt_ == "csv":
+        for name, df in (("runs", experiment_runs(ctx, exp["id"])), ("aggregate", pd.DataFrame(r["aggregate"])),
+                         ("policy_comparison", pd.DataFrame(r["policy_comparison"]))):
+            p = out / f"{tag}{name}.csv"
+            p.write_text(header + df.to_csv(index=False))
+            paths.append(p)
+    elif fmt_ == "md":
+        p = out / f"{tag}report.md"
+        p.write_text(experiment_markdown(exp))
+        paths.append(p)
+    else:
+        p = out / f"{tag}report.html"
+        p.write_text(experiment_html(exp))
+        paths.append(p)
+    return paths

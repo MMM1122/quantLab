@@ -54,6 +54,18 @@ class IngestRequest(BaseModel):
     seed: int = 7
 
 
+class DQ001Request(BaseModel):
+    snapshot_id: str
+    symbol: str = "SPY"
+    strategies: list[str] = Field(default_factory=lambda: ["sma-crossover", "rsi-mean-reversion"])
+    seeds: list[int] = Field(default_factory=lambda: [11, 23, 37, 41, 53], min_length=1, max_length=20)
+    scenarios: list[str] | None = None
+    eval_start: str | None = None
+    eval_end: str | None = None
+    commission_bps: float = Field(1.0, ge=0)
+    slippage_bps: float = Field(2.0, ge=0)
+
+
 class BacktestRequest(BaseModel):
     strategy: str
     snapshot_id: str
@@ -196,6 +208,45 @@ def create_app(data_dir: str | None = None, ctx: AppContext | None = None) -> Fa
         df = df.assign(session=df["session"].astype(str), decision_session=df["decision_session"].astype(str))
         return envelope(df.to_dict(orient="records"), t0, mode="BACKTEST", run_id=r["id"], label=BACKTEST_LABEL,
                         data_label=(r.get("result") or {}).get("data_label"))
+
+    @app.post("/experiments/dq-001", status_code=202)
+    def create_dq001(req: DQ001Request):
+        from quantlab.research.dq_001 import DQ001Config, run_dq001
+        from quantlab.research.perturbations import DEFAULT_SCENARIOS
+
+        snap = ctx.snapshots.get(req.snapshot_id)
+        scen = [sc for sc in DEFAULT_SCENARIOS if req.scenarios is None or sc.name in req.scenarios or sc.is_clean]
+        cfg = DQ001Config(snapshot_id=snap.id, symbol=req.symbol, strategies=req.strategies, seeds=req.seeds,
+                          scenarios=scen, eval_start=req.eval_start, eval_end=req.eval_end,
+                          commission_bps=req.commission_bps, slippage_bps=req.slippage_bps)
+        cfg.validate()
+        from quantlab.core.ids import new_id
+
+        eid = new_id()
+
+        def work():
+            run_dq001(ctx, cfg, experiment_id=eid)
+            return eid
+
+        jid = jobs.submit("experiment.dq001", req.model_dump(), work)
+        return envelope({"job_id": jid, "experiment_id": eid, "status": "PENDING"}, mode="RESEARCH",
+                        data_label=data_label(snap.is_synthetic))
+
+    @app.get("/experiments")
+    def experiments():
+        from quantlab.research.dq_001 import list_experiments
+
+        return envelope(list_experiments(ctx), mode="RESEARCH")
+
+    @app.get("/experiments/{experiment_id}")
+    def experiment(experiment_id: str):
+        from quantlab.research.dq_001 import get_experiment
+
+        e = get_experiment(ctx, experiment_id)
+        res = e.get("results") or {}
+        return envelope({"id": e["id"], "code": e["code"], "status": e["status"], "hypothesis": e["hypothesis"],
+                         "failure_reason": e["failure_reason"], "design": e["design"], "results": res or None},
+                        mode="RESEARCH", run_id=e["id"], label=res.get("label"), data_label=res.get("data_label"))
 
     @app.get("/jobs/{job_id}")
     def job(job_id: str):
