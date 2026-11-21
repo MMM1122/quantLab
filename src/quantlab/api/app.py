@@ -28,7 +28,7 @@ from quantlab.core.errors import (
     QuantLabError,
     RiskRejection,
 )
-from quantlab.core.labels import BACKTEST_LABEL, data_label
+from quantlab.core.labels import BACKTEST_LABEL, REPLAY_LABEL, data_label
 from quantlab.data.ingestion import ingest, validate_date_range
 from quantlab.data.providers import get_provider
 from quantlab.jobs import JobRunner
@@ -64,6 +64,35 @@ class DQ001Request(BaseModel):
     eval_end: str | None = None
     commission_bps: float = Field(1.0, ge=0)
     slippage_bps: float = Field(2.0, ge=0)
+
+
+class PaperAccountRequest(BaseModel):
+    name: str
+    snapshot_id: str
+    initial_cash: float = Field(10_000.0, gt=0)
+    start_session: str | None = None
+    mode: str = "PAPER"
+
+
+class PaperOrderRequest(BaseModel):
+    account_id: str
+    symbol: str
+    side: Literal["BUY", "SELL"]
+    quantity: int = Field(gt=0)
+    client_order_id: str | None = Field(None, max_length=64)
+    order_type: str = "MARKET"
+    mode: str = "PAPER"
+
+
+class PaperAdvanceRequest(BaseModel):
+    account_id: str
+    sessions: int = Field(1, ge=1, le=2520)
+
+
+class KillSwitchRequest(BaseModel):
+    account_id: str
+    active: bool
+    reason: str = ""
 
 
 class BacktestRequest(BaseModel):
@@ -247,6 +276,48 @@ def create_app(data_dir: str | None = None, ctx: AppContext | None = None) -> Fa
         return envelope({"id": e["id"], "code": e["code"], "status": e["status"], "hypothesis": e["hypothesis"],
                          "failure_reason": e["failure_reason"], "design": e["design"], "results": res or None},
                         mode="RESEARCH", run_id=e["id"], label=res.get("label"), data_label=res.get("data_label"))
+
+    from quantlab.paper.broker import PaperBroker
+
+    broker = PaperBroker(ctx)
+    app.state.broker = broker
+
+    @app.get("/paper/account")
+    def paper_account(account_id: str | None = None):
+        data = broker.account_state(account_id) if account_id else broker.list_accounts()
+        return envelope(data, mode="PAPER", label=REPLAY_LABEL)
+
+    @app.post("/paper/accounts", status_code=201)
+    def paper_create(req: PaperAccountRequest):
+        reject_live(req.mode)
+        return envelope(broker.create_account(req.name, req.snapshot_id, req.initial_cash, req.start_session,
+                                              req.mode), mode="PAPER", label=REPLAY_LABEL)
+
+    @app.post("/paper/orders", status_code=201)
+    def paper_order(req: PaperOrderRequest):
+        reject_live(req.mode)
+        o = broker.submit_order(req.account_id, req.symbol, req.side, req.quantity, req.client_order_id,
+                                req.order_type, actor="api", mode=req.mode)
+        return envelope(o, mode="PAPER", label=REPLAY_LABEL)
+
+    @app.get("/paper/orders")
+    def paper_orders(account_id: str):
+        return envelope(broker.list_orders(account_id), mode="PAPER", label=REPLAY_LABEL)
+
+    @app.post("/paper/advance")
+    def paper_advance(req: PaperAdvanceRequest):
+        t0 = time.perf_counter()
+        out = broker.advance_session(req.account_id, req.sessions)
+        return envelope({"sessions": out, "account": broker.account_state(req.account_id)}, t0, mode="PAPER",
+                        label=REPLAY_LABEL)
+
+    @app.post("/paper/kill-switch")
+    def paper_kill(req: KillSwitchRequest):
+        return envelope(broker.set_kill_switch(req.account_id, req.active, req.reason), mode="PAPER")
+
+    @app.get("/risk/events")
+    def risk_events(account_id: str | None = None):
+        return envelope(broker.risk_events(account_id), mode="PAPER")
 
     @app.get("/jobs/{job_id}")
     def job(job_id: str):
