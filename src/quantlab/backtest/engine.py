@@ -32,6 +32,7 @@ from quantlab.backtest.execution import CostModel
 from quantlab.backtest.market import MarketPanel
 from quantlab.core.errors import AccountingInvariantError, InputValidationError
 from quantlab.domain.models import PriceMode
+from quantlab.portfolio.accounting import assert_cash_non_negative, position_values
 from quantlab.strategies.base import Strategy
 
 CASH_TOL = 1e-6
@@ -208,15 +209,10 @@ def run_backtest(
                 last_close[j] = C[i, j]
             elif qty[j] > 0:
                 stale += 1
-        held_val = np.where(qty > 0, qty * np.nan_to_num(last_close, nan=0.0), 0.0)
-        if np.any(qty < 0):
-            raise AccountingInvariantError(f"negative position on {d:%Y-%m-%d}")
-        if np.any((qty > 0) & ~np.isfinite(last_close)):
-            raise AccountingInvariantError(f"cannot value position without any price on {d:%Y-%m-%d}")
-        mv = float(held_val.sum())
+        when = f"on {d:%Y-%m-%d}"
+        mv = float(position_values(qty, last_close, when).sum())
         nav = cash + mv
-        if cash < -CASH_TOL:
-            raise AccountingInvariantError(f"negative cash {cash} on {d:%Y-%m-%d}")
+        assert_cash_non_negative(cash, when, CASH_TOL)
         eq_rows.append({"session": d, "cash": cash, "positions_value": mv, "nav": nav,
                         "gross_exposure": mv / nav if nav > 0 else 0.0, "stale_marks": stale,
                         "dividends": div_cash})

@@ -158,3 +158,4 @@ tests/unit, tests/integration
 Generated data lives in `data/` (gitignored): `snapshots/`, `runs/`, `experiments/`, `exports/`, `quantlab.db`.
 
 Read `docs/backtest_assumptions.md` and `docs/limitations.md` before interpreting any result.
+The status of v1.0.0, test results and remaining tasks are in `docs/FINAL_REPORT.md`.

@@ -43,6 +43,7 @@ from quantlab.core.labels import REPLAY_LABEL, data_label
 from quantlab.data import calendar
 from quantlab.data.ingestion import require_tradable_snapshot
 from quantlab.domain.models import OPEN_ORDER_STATUSES, OrderSide, OrderStatus, PriceBasis
+from quantlab.portfolio.accounting import assert_cash_non_negative, net_asset_value, weights
 from quantlab.risk import rules
 from quantlab.storage.db import dumps, loads, utcnow
 
@@ -223,8 +224,9 @@ class PaperBroker:
             holdings.append({"symbol": s, "quantity": str(q), "last_close": str(px), "market_value": str(money(val)),
                              "price_age_sessions": stale})
         nav = cash + mv
+        w = weights({h["symbol"]: D(h["market_value"]) for h in holdings}, nav)
         for h in holdings:
-            h["weight"] = float(D(h["market_value"]) / nav) if nav > 0 else None
+            h["weight"] = w[h["symbol"]]
         return {
             "id": acc["id"], "name": acc["name"], "mode": acc["mode"], "status": acc["status"],
             "label": REPLAY_LABEL, "data_label": data_label(mkt.is_synthetic), "is_synthetic": mkt.is_synthetic,
@@ -423,8 +425,7 @@ class PaperBroker:
         status = OrderStatus.FILLED if filled == D(o["quantity"]) else OrderStatus.PARTIALLY_FILLED
         con.execute("UPDATE orders SET filled_quantity=?, status=?, updated_at=? WHERE id=?",
                     (str(filled), status.value, now, order_id))
-        if self._cash(con, aid) < 0:
-            raise AccountingInvariantError("fill would make cash negative")  # rolls back the transaction
+        assert_cash_non_negative(self._cash(con, aid), "after fill", tolerance=0)  # raising rolls back
         return True
 
     # ------------------------------------------------------------------ replay clock
@@ -551,13 +552,10 @@ class PaperBroker:
     def _snapshot_portfolio(self, con, aid: str, mkt: _Market, i: int) -> None:
         cash = self._cash(con, aid)
         pos = self._positions(con, aid)
-        holdings = {}
-        mv = ZERO
-        for s, q in pos.items():
-            px = mkt.last_close(s, i) or ZERO
-            mv += q * px
-            holdings[s] = {"quantity": str(q), "close": str(px)}
-        nav = cash + mv
+        prices = {s: mkt.last_close(s, i) or ZERO for s in pos}
+        holdings = {s: {"quantity": str(q), "close": str(prices[s])} for s, q in pos.items()}
+        nav = net_asset_value(cash, pos, prices)
+        mv = nav - cash
         con.execute("INSERT OR REPLACE INTO portfolio_snapshots(id, account_id, session_date, nav, cash_value, "
                     "gross_exposure, holdings) VALUES (?,?,?,?,?,?,?)",
                     (deterministic_id("ps", aid, mkt.sessions[i]), aid, mkt.sessions[i].strftime("%Y-%m-%d"),
