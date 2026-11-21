@@ -27,7 +27,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.5"]
+dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.10", "types-PyYAML"]
 
 [project.scripts]
 quantlab = "quantlab.cli.main:main"
@@ -44,6 +44,14 @@ markers = [
 filterwarnings = [
   "ignore::DeprecationWarning",
 ]
+
+[tool.mypy]
+files = ["src/quantlab"]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
 
 [tool.ruff]
 line-length = 110

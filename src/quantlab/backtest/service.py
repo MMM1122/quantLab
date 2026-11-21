@@ -222,7 +222,7 @@ def metrics_in_currency(ctx: AppContext, run_id: str, currency: str = "USD") -> 
     rf = res["config"]["risk_free_rate"]
     out: dict[str, Any] = {}
     curves: dict[str, pd.Series] = {}
-    info = {}
+    info: dict[str, Any] = {}
     for name, artifact in (("net", "equity"), ("gross", "equity_gross"), ("benchmark", "benchmark_equity")):
         try:
             eq = load_artifact(ctx, run_id, artifact).set_index("session")

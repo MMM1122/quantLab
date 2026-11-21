@@ -18,6 +18,7 @@ class MomentumParams(StrategyParams):
 
 
 class CrossSectionalMomentum(Strategy):
+    params: MomentumParams
     id = "momentum"
     name = "Cross-sectional Momentum (12-1)"
     version = "1.0.0"

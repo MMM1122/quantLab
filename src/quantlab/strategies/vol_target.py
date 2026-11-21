@@ -22,6 +22,7 @@ class VolTargetParams(StrategyParams):
 
 
 class VolatilityTarget(Strategy):
+    params: VolTargetParams
     id = "vol-target"
     name = "Volatility Target"
     version = "1.0.0"

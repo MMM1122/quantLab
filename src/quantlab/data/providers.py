@@ -86,14 +86,18 @@ class YFinanceProvider:
 
     name = "yfinance"
 
-    def __init__(self, downloader: Callable[[str, str, str], pd.DataFrame] | None = None):
+    def __init__(self, downloader: Callable[[str, str, str], pd.DataFrame] | None = None,
+                 now: Callable[[], pd.Timestamp] | None = None):
         self._download = downloader or _default_yf_download
+        self._now = now or (lambda: pd.Timestamp.now(tz="America/New_York"))
 
     def fetch(self, symbols: list[str], start: str, end: str) -> ProviderResult:
         warnings.warn(YF_TERMS_WARNING, UserWarning, stacklevel=2)
         end_excl = (pd.Timestamp(end) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
         frames = []
         errors: dict[str, str] = {}
+        notes: list[str] = []
+        last_done = calendar.last_completed_session(self._now())
         for sym in symbols:
             try:
                 raw = self._download(sym, start, end_excl)
@@ -103,7 +107,12 @@ class YFinanceProvider:
             if raw is None or len(raw) == 0:
                 errors[sym] = "provider returned no rows"
                 continue
-            frames.append(self._normalize(sym, raw))
+            df, sym_notes = clean_provider_rows(sym, self._normalize(sym, raw), last_done)
+            notes += sym_notes
+            if df.empty:
+                errors[sym] = "no completed-session rows after cleanup"
+                continue
+            frames.append(df)
         if errors:
             raise DataUnavailableError(f"yfinance fetch failed for {sorted(errors)}: {errors}")
         bars = canonicalize_bars(pd.concat(frames, ignore_index=True))
@@ -112,8 +121,9 @@ class YFinanceProvider:
             provider=self.name,
             price_basis=PriceBasis.SPLIT_ADJUSTED.value,
             is_synthetic=False,
-            parameters={"symbols": symbols, "start": start, "end": end, "auto_adjust": False, "actions": True},
-            warnings=[YF_TERMS_WARNING],
+            parameters={"symbols": symbols, "start": start, "end": end, "auto_adjust": False, "actions": True,
+                        "last_completed_session": last_done.strftime("%Y-%m-%d"), "provider_cleanup": notes},
+            warnings=[YF_TERMS_WARNING, *notes],
         )
 
     @staticmethod
@@ -150,6 +160,60 @@ class YFinanceProvider:
         out["split_ratio"] = out["split_ratio"].where(out["split_ratio"] > 0, 1.0)
         out["dividend"] = out["dividend"].fillna(0.0)
         return out
+
+
+def clean_provider_rows(symbol: str, df: pd.DataFrame, last_completed: pd.Timestamp) -> tuple[pd.DataFrame, list[str]]:
+    """Handle known Yahoo quirks explicitly; every change is reported (stored in snapshot provenance).
+
+    1. Bars for sessions that have not closed yet (intraday download) are dropped — a partial bar
+       would otherwise be treated as a final close.
+    2. Action-only rows (no prices, but a dividend/split) dated on a non-session day are moved to the
+       next XNYS session (the effective ex-date); on a session day they are merged into that
+       session's price row.
+    3. Rows with no prices and no actions are dropped.
+    4. Exact duplicate rows are collapsed. Conflicting duplicates are KEPT so validation flags them.
+    """
+    notes: list[str] = []
+    df = df.copy()
+    prices = df[["open", "high", "low", "close"]]
+    no_price = prices.isna().all(axis=1)
+    has_action = (df["dividend"].fillna(0) > 0) | (df["split_ratio"].fillna(1) != 1.0)
+
+    future = df["session_date"] > last_completed
+    if future.any():
+        notes.append(f"{symbol}: dropped {int(future.sum())} bar(s) for session(s) not yet closed "
+                     f"(after {last_completed:%Y-%m-%d})")
+        df, no_price, has_action = df[~future], no_price[~future], has_action[~future]
+
+    empty = no_price & ~has_action
+    if empty.any():
+        notes.append(f"{symbol}: dropped {int(empty.sum())} empty provider row(s) without prices or actions")
+        df, no_price, has_action = df[~empty], no_price[~empty], has_action[~empty]
+
+    actions_only = df[no_price & has_action]
+    if len(actions_only):
+        df = df[~(no_price & has_action)].copy()
+        for _, a in actions_only.iterrows():
+            d = pd.Timestamp(a["session_date"])
+            target = d if calendar.is_session(d) else calendar.sessions(d, d + pd.Timedelta(days=10))[0]
+            m = df["session_date"] == target
+            if not m.any():
+                notes.append(f"{symbol}: dropped corporate action on {d:%Y-%m-%d} — no price row for session "
+                             f"{target:%Y-%m-%d} (dividend {a['dividend']}, split {a['split_ratio']})")
+                continue
+            i = df.index[m][0]
+            if a["dividend"] and a["dividend"] > 0:
+                df.loc[i, "dividend"] = max(float(df.loc[i, "dividend"] or 0), float(a["dividend"]))
+            if a["split_ratio"] and a["split_ratio"] != 1.0:
+                df.loc[i, "split_ratio"] = float(a["split_ratio"])
+            moved = "" if target == d else f" moved from non-session day {d:%Y-%m-%d} to {target:%Y-%m-%d}"
+            notes.append(f"{symbol}: merged action-only row into session {target:%Y-%m-%d}{moved}")
+
+    dup_exact = df.duplicated(keep="first")
+    if dup_exact.any():
+        notes.append(f"{symbol}: collapsed {int(dup_exact.sum())} exact duplicate row(s)")
+        df = df[~dup_exact]
+    return df.reset_index(drop=True), notes
 
 
 # --------------------------------------------------------------------------- synthetic

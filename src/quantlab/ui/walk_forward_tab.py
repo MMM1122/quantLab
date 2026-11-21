@@ -85,7 +85,7 @@ def walk_forward_tab(ctx: AppContext) -> None:
     folds["chosen_params"] = folds["chosen_params"].apply(json.dumps)
     st.dataframe(folds, hide_index=True, width="stretch")
     st.markdown("\n".join(f"- {f}" for f in r["findings"]))
-    c = st.columns(2)
-    c[0].download_button("Report (Markdown)", walkforward_markdown(exp), f"walkforward_{exp['id'][:8]}.md", key="wf_md")
-    c[1].download_button("Report (HTML)", walkforward_html(exp, oos, bench), f"walkforward_{exp['id'][:8]}.html",
+    dl = st.columns(2)
+    dl[0].download_button("Report (Markdown)", walkforward_markdown(exp), f"walkforward_{exp['id'][:8]}.md", key="wf_md")
+    dl[1].download_button("Report (HTML)", walkforward_html(exp, oos, bench), f"walkforward_{exp['id'][:8]}.html",
                          key="wf_html")

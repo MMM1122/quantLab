@@ -72,8 +72,8 @@ def yahoo_fx(start: str, end: str, downloader: Callable[[str, str, str], pd.Data
     df = pd.DataFrame({"o": raw["Open"].to_numpy(float), "h": raw["High"].to_numpy(float),
                        "l": raw["Low"].to_numpy(float), "c": raw["Close"].to_numpy(float)}, index=idx)
     df = df[~df.index.duplicated(keep="last")]
-    sess = calendar.sessions(start, end)
-    df = df[df.index.isin(sess)]  # align to XNYS sessions
+    sess = calendar.sessions(start, min(pd.Timestamp(end), calendar.last_completed_session()))
+    df = df[df.index.isin(sess)]  # align to completed XNYS sessions (no in-progress rate)
     return _bars_from_rates(pd.DatetimeIndex(df.index), df["o"], df["h"], df["l"], df["c"], "yfinance")
 
 

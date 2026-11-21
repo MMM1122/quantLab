@@ -15,6 +15,7 @@
 - [x] Volatility-target overlay; statistical test module (JK/Memmel, block bootstrap, PSR/DSR)
 - [x] Paper strategy autopilot (risk-checked, drift trims, idempotent) + paper-vs-backtest consistency report
 - [x] CAD reporting currency (USDCAD snapshots, CAD metrics/curves, paper NAV in CAD)
+- [x] Hardening: mypy-clean package (CI), Yahoo quirk handling (partial bars, action-only rows, duplicates)
 
 ## Next (prioritised)
 | prio | item |

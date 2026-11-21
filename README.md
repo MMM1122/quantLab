@@ -138,6 +138,7 @@ token-protected API on every push (`.github/workflows/ci.yml`, job `docker`).
 ## Tests and checks
 ```bash
 ruff check .                         # lint
+mypy                                 # type check (src/quantlab)
 pytest -q                            # 170 unit + integration tests (offline)
 bash scripts/smoke_test.sh           # lint + tests + CLI flow + API/Streamlit health
 python scripts/acceptance_test.py    # full end-to-end acceptance incl. restart persistence

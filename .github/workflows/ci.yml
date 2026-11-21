@@ -27,6 +27,8 @@ jobs:
           pip install -e ".[dev]"
       - name: Lint
         run: ruff check .
+      - name: Type check
+        run: mypy
       - name: Tests (offline fixtures only)
         run: pytest -q -p no:warnings -o addopts=""
       - name: Acceptance (offline)

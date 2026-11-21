@@ -34,6 +34,9 @@ class Strategy(ABC):
     description: ClassVar[str]
     params: StrategyParams
 
+    def __init__(self, params: Any = None, **kwargs: Any) -> None:  # concrete strategies define their own
+        raise NotImplementedError
+
     @property
     @abstractmethod
     def warmup_sessions(self) -> int:

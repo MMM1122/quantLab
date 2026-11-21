@@ -58,7 +58,7 @@ def df_to_markdown(df: pd.DataFrame) -> str:
 
 
 def metrics_table(metrics: dict[str, Any]) -> pd.DataFrame:
-    cols = {k: metrics.get(k) for k in ("net", "gross", "benchmark") if metrics.get(k)}
+    cols: dict[str, dict[str, Any]] = {k: metrics[k] for k in ("net", "gross", "benchmark") if metrics.get(k)}
     rows = []
     for key, label, kind in METRIC_ROWS:
         rows.append({"metric": label, **{c: fmt(m.get(key), kind) for c, m in cols.items()}})
@@ -236,7 +236,7 @@ def experiment_html(exp: dict[str, Any]) -> str:
     r = exp["results"]
     agg = pd.DataFrame(r["aggregate"])
     agg = agg[agg.scenario != "clean"].copy()
-    figs = []
+    figs: list[str] = []
     for sid, g in agg.groupby("strategy", sort=False):
         g = g.assign(err=(g["delta_total_return_ci_high"] - g["delta_total_return_mean"]).fillna(0) * 100,
                      y=g["delta_total_return_mean"] * 100)

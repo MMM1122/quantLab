@@ -37,6 +37,7 @@ def rsi(prices: pd.DataFrame, window: int, min_coverage: float) -> pd.DataFrame:
 
 
 class RSIMeanReversion(Strategy):
+    params: RSIParams
     id = "rsi-mean-reversion"
     name = "RSI Mean Reversion"
     version = "1.0.0"

@@ -237,7 +237,7 @@ def summarize_walkforward(f: dict[str, Any]) -> str:
 class ResearchAssistant:
     def __init__(self, db_path, provider: LLMProvider | None | str = "env"):
         self.tools = ReadOnlyResearchTools(db_path)
-        self.provider = provider_from_env() if provider == "env" else provider
+        self.provider: LLMProvider | None = provider_from_env() if isinstance(provider, str) else provider
 
     def _finish(self, task: str, draft: str, context: dict[str, Any], sources: list[str],
                 question: str | None) -> AssistantResponse:

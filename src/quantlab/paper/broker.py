@@ -213,7 +213,7 @@ class PaperBroker:
         with self.db.connect() as con:
             cash = self._cash(con, acc["id"])
             pos = self._positions(con, acc["id"])
-        holdings = []
+        holdings: list[dict[str, Any]] = []
         mv = ZERO
         for s, q in sorted(pos.items()):
             px = mkt.last_close(s, i)
@@ -312,11 +312,13 @@ class PaperBroker:
                                    "only if intentional)"),
                 rules.long_only(side_e, qty, pos.get(sym, ZERO), pend_sell),
             )
+            if decision.approved and px is None:  # defensive: fresh_data should already have caught this
+                decision = rules.RiskDecision(False, "NO_MARKET_DATA", f"no price for {sym} at the replay session")
             band = D(cfg.get("limit_price_band", 0.20))
             if decision.approved and lp is not None and px is not None and abs(lp / px - 1) > band:
                 decision = rules.RiskDecision(False, "LIMIT_PRICE_OUT_OF_BAND",
                                               f"limit {lp} is more than {band:.0%} away from last close {px}")
-            if decision.approved and side_e == OrderSide.BUY:
+            if decision.approved and side_e == OrderSide.BUY and px is not None:
                 est_px = lp if lp is not None else self._fill_price(cfg, px, "BUY")
                 est = qty * est_px
                 decision = rules.first_failure(
@@ -336,7 +338,7 @@ class PaperBroker:
                  None if decision.approved else f"{decision.rule}: {decision.reason}", acc["current_session"], now, now),
             )
             if not decision.approved:
-                self._risk_event(con, aid, decision.rule, "ORDER_REJECTED",
+                self._risk_event(con, aid, decision.rule or "UNSPECIFIED", "ORDER_REJECTED",
                                  {"order_id": oid, "symbol": sym, "side": side_e.value, "quantity": str(qty),
                                   "reason": decision.reason})
             self.db.audit(actor, "paper.order." + status.value.lower(), "order", oid,
@@ -491,11 +493,12 @@ class PaperBroker:
                 q = min(rem, cap)
                 px = self._fill_price(cfg, D(b.open).quantize(PRICE_Q), o["side"])
                 if o["order_type"] == "LIMIT":
-                    px = limit_fill_price(o["side"], D(o["limit_price"]), px, D(b.low), D(b.high))
-                    if px is None:
+                    lim_px = limit_fill_price(o["side"], D(o["limit_price"]), px, D(b.low), D(b.high))
+                    if lim_px is None:
                         summary["notes"].append(f"{o['symbol']}: limit {o['limit_price']} not reached on {d}")
                         self._expire_day_order(con, o, d, summary)
                         continue
+                    px = lim_px
                 if o["side"] == "SELL":
                     held = self._positions(con, aid).get(o["symbol"], ZERO)
                     q = min(q, held)
