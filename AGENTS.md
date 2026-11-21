@@ -24,6 +24,7 @@ test results, no live trading.
 | `backtest` | event-driven engine, fills, metrics, persistence | data, strategies, risk, portfolio, storage |
 | `research` | DQ-001 perturbations, policies, statistics | backtest, data |
 | `paper` | Decimal ledger, orders, fills, replay, kill switch | data, risk, storage |
+| `paper.autopilot`, `paper.compare` | deterministic strategy → paper orders (via broker risk checks); paper-vs-backtest report | paper, strategies, backtest |
 | `ai` | read-only tools, deterministic summaries, optional LLM adapter | storage (read-only) |
 | `reports` | CSV/JSON/Markdown/HTML exports | backtest, research |
 | `api`, `cli`, `apps/dashboard` | interfaces only; no domain logic | everything above |

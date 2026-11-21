@@ -17,7 +17,7 @@ Local-first quantitative research, backtesting and **paper**-trading platform fo
 | Backtests | event-driven daily loop, next-open execution, slippage + commission, integer shares, cash/position invariants, dividends & splits without double counting, net/gross/benchmark metrics, Sharpe CI, reproducible runs with full provenance |
 | Walk-forward | parameter grid chosen on training windows only, evaluated on later unseen windows; stitched out-of-sample equity, OOS rank of chosen params, leakage test |
 | DQ-001 | missing/delayed/corrupted perturbations, strict / bounded / naive (research-only) policies, multi-seed CIs, derived snapshots, detection rates, reports |
-| Paper trading | PAPER-only accounts on historical replay, Decimal ledger, MARKET and LIMIT orders with DAY/GTC, pre-trade risk (no shorting, no margin/negative cash, ≤25% per asset, stale data, duplicates, limit price band, kill switch), idempotent orders & fills, partial fills, reconciliation, persistence across restarts |
+| Paper trading | PAPER-only accounts on historical replay, Decimal ledger, MARKET and LIMIT orders with DAY/GTC, strategy autopilot with paper-vs-backtest consistency report, pre-trade risk (no shorting, no margin/negative cash, ≤25% per asset, stale data, duplicates, limit price band, kill switch), idempotent orders & fills, partial fills, reconciliation, persistence across restarts |
 | AI assistant | read-only tools (SQLite `mode=ro`), deterministic analytics without a key, optional Anthropic/OpenAI phrasing with every number verified against stored data, refuses order requests |
 | Interfaces | Streamlit (Overview, Market Explorer, Strategy Studio, Backtest Lab, Research Lab, Paper Trading, AI Assistant), FastAPI with jobs, CLI, CSV/JSON/Markdown/HTML exports |
 
@@ -61,6 +61,9 @@ quantlab paper advance --account <account_id> --sessions 5
 quantlab paper status --account <account_id>
 quantlab paper kill-switch --account <account_id> on --reason "manual stop"
 quantlab paper reconcile --account <account_id>
+quantlab paper autopilot attach --account <account_id> --strategy momentum --symbols SPY QQQ IWM TLT GLD
+quantlab paper autopilot run --account <account_id> --sessions 250
+quantlab paper autopilot compare --account <account_id>   # paper vs backtest, with explained gaps
 
 # 5) AI assistant (deterministic without API key)
 quantlab ai explain --run <run_id>
@@ -132,7 +135,7 @@ token-protected API on every push (`.github/workflows/ci.yml`, job `docker`).
 ## Tests and checks
 ```bash
 ruff check .                         # lint
-pytest -q                            # 159 unit + integration tests (offline)
+pytest -q                            # 164 unit + integration tests (offline)
 bash scripts/smoke_test.sh           # lint + tests + CLI flow + API/Streamlit health
 python scripts/acceptance_test.py    # full end-to-end acceptance incl. restart persistence
 python scripts/acceptance_test.py --offline   # skip the yfinance attempt

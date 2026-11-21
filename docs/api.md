@@ -33,6 +33,9 @@ Errors: `{"error": <type>, "detail": <message>}` with 422 (invalid input), 404 (
 | GET | `/paper/orders?account_id=` | |
 | POST | `/paper/advance` | `{account_id, sessions}` step the replay clock |
 | POST | `/paper/kill-switch` | `{account_id, active, reason}` |
+| POST | `/paper/autopilot` | `{account_id, strategy, symbols, params}` attach a deterministic strategy |
+| POST | `/paper/autopilot/run` | `{account_id, sessions}` decide at close → advance → repeat |
+| GET | `/paper/autopilot/compare?account_id=` | paper vs backtest NAV with explained differences |
 | GET | `/risk/events` | |
 | POST | `/ai/ask` | `{task: explain|compare|summarize_experiment, ids, question?}` read-only |
 | POST | `/orders/live` | always 403 — exists only to prove there is no live path |

@@ -71,6 +71,31 @@ def cmd_reconcile(args) -> int:
     return 0 if r["ok"] else 4
 
 
+def cmd_autopilot(args) -> int:
+    import json as _json
+
+    from quantlab.paper.autopilot import StrategyAutopilot
+
+    ap = StrategyAutopilot(_ctx(args))
+    if args.action == "attach":
+        params = _json.loads(args.params) if args.params else {}
+        _print(ap.attach(args.account, args.strategy, args.symbols, params))
+    elif args.action == "run":
+        out = ap.run(args.account, args.sessions)
+        _show({k: v for k, v in out.items()})
+    elif args.action == "compare":
+        from quantlab.paper.compare import paper_vs_backtest
+
+        r = paper_vs_backtest(ap.ctx, args.account)
+        r.pop("_series")
+        _print(r)
+    elif args.action in ("enable", "disable"):
+        _print(ap.set_enabled(args.account, args.action == "enable"))
+    else:
+        _print(ap.get(args.account))
+    return 0
+
+
 def register(sub) -> None:
     p = sub.add_parser("paper", help="paper trading on historical replay").add_subparsers(dest="cmd", required=True)
     c = p.add_parser("create")
@@ -109,6 +134,14 @@ def register(sub) -> None:
     k.add_argument("state", choices=["on", "off"])
     k.add_argument("--reason", default="")
     k.set_defaults(func=cmd_kill)
+    au = p.add_parser("autopilot", help="run a deterministic strategy on the paper account (replay only)")
+    au.add_argument("action", choices=["attach", "run", "compare", "status", "enable", "disable"])
+    au.add_argument("--account", required=True)
+    au.add_argument("--strategy", default="sma-crossover")
+    au.add_argument("--symbols", nargs="+", default=["SPY"])
+    au.add_argument("--params", default=None, help="JSON strategy parameters")
+    au.add_argument("--sessions", type=int, default=20)
+    au.set_defaults(func=cmd_autopilot)
     r = p.add_parser("reconcile")
     r.add_argument("--account", required=True)
     r.set_defaults(func=cmd_reconcile)

@@ -1,3 +1,4 @@
+import json
 import uuid
 from decimal import Decimal
 
@@ -7,7 +8,10 @@ import streamlit as st
 
 from quantlab.core.errors import QuantLabError
 from quantlab.core.labels import REPLAY_LABEL
+from quantlab.paper.autopilot import StrategyAutopilot
 from quantlab.paper.broker import PaperBroker
+from quantlab.paper.compare import paper_vs_backtest
+from quantlab.strategies.registry import STRATEGIES
 from quantlab.ui.common import get_ctx, safety_banner, snapshot_selector, synthetic_banner
 
 ctx = get_ctx()
@@ -101,6 +105,48 @@ with right:
     if k2.button("Deactivate kill switch"):
         broker.set_kill_switch(aid, False, reason)
         st.info("Kill switch off.")
+
+with st.expander("Strategy autopilot (deterministic strategy places the paper orders; AI never does)"):
+    ap_svc = StrategyAutopilot(ctx, broker)
+    try:
+        ap_cfg = ap_svc.get(aid)
+    except QuantLabError:
+        ap_cfg = None
+    snap_syms = ctx.snapshots.get(state["snapshot_id"]).symbols
+    with st.form("ap_form"):
+        c1, c2 = st.columns(2)
+        ap_strat = c1.selectbox("Strategy", list(STRATEGIES),
+                                index=list(STRATEGIES).index(ap_cfg["strategy"]) if ap_cfg else 1)
+        ap_syms = c2.multiselect("Symbols", snap_syms, default=ap_cfg["symbols"] if ap_cfg else snap_syms[:1])
+        ap_params = st.text_input("Parameters (JSON)", json.dumps(ap_cfg["params"]) if ap_cfg else "{}")
+        if st.form_submit_button("Attach / replace autopilot"):
+            try:
+                ap_cfg = ap_svc.attach(aid, ap_strat, ap_syms, json.loads(ap_params or "{}"))
+                st.success("Autopilot attached.")
+            except (QuantLabError, ValueError) as exc:
+                st.error(str(exc))
+    if ap_cfg:
+        st.caption(f"Attached: {ap_cfg['strategy']} {ap_cfg['params']} on {', '.join(ap_cfg['symbols'])} · "
+                   f"enabled={ap_cfg['enabled']} · weights capped at {state['risk_limits']['max_position_weight']}")
+        n_ap = st.number_input("Sessions to run", min_value=1, max_value=2000, value=20, key="ap_n")
+        if st.button("Run autopilot"):
+            try:
+                out = ap_svc.run(aid, int(n_ap))
+                st.success(f"Advanced {out['sessions_advanced']} sessions · {out['orders_submitted']} orders "
+                           f"({out['orders_rejected']} rejected by risk checks)")
+            except QuantLabError as exc:
+                st.error(str(exc))
+        if st.button("Compare with backtest"):
+            try:
+                cmp_ = paper_vs_backtest(ctx, aid)
+                ser = cmp_.pop("_series")
+                fig = go.Figure([go.Scatter(x=ser.index, y=ser["paper"], name="paper (replay)"),
+                                 go.Scatter(x=ser.index, y=ser["backtest"], name="backtest", line={"dash": "dot"})])
+                fig.update_layout(title="Paper vs backtest NAV", template="plotly_white", height=300)
+                st.plotly_chart(fig, width="stretch")
+                st.json(cmp_)
+            except QuantLabError as exc:
+                st.info(str(exc))
 
 state = broker.account_state(aid)
 st.subheader("Holdings")

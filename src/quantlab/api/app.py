@@ -98,6 +98,18 @@ class PaperAdvanceRequest(BaseModel):
     sessions: int = Field(1, ge=1, le=2520)
 
 
+class AutopilotAttachRequest(BaseModel):
+    account_id: str
+    strategy: str
+    symbols: list[str] = Field(min_length=1)
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class AutopilotRunRequest(BaseModel):
+    account_id: str
+    sessions: int = Field(1, ge=1, le=5000)
+
+
 class KillSwitchRequest(BaseModel):
     account_id: str
     active: bool
@@ -410,6 +422,29 @@ def create_app(data_dir: str | None = None, ctx: AppContext | None = None, api_t
     @app.post("/paper/kill-switch")
     def paper_kill(req: KillSwitchRequest):
         return envelope(broker.set_kill_switch(req.account_id, req.active, req.reason), mode="PAPER")
+
+    @app.post("/paper/autopilot")
+    def autopilot_attach(req: AutopilotAttachRequest):
+        from quantlab.paper.autopilot import StrategyAutopilot
+
+        return envelope(StrategyAutopilot(ctx, broker).attach(req.account_id, req.strategy, req.symbols, req.params),
+                        mode="PAPER", label=REPLAY_LABEL)
+
+    @app.post("/paper/autopilot/run")
+    def autopilot_run(req: AutopilotRunRequest):
+        from quantlab.paper.autopilot import StrategyAutopilot
+
+        t0 = time.perf_counter()
+        return envelope(StrategyAutopilot(ctx, broker).run(req.account_id, req.sessions), t0, mode="PAPER",
+                        label=REPLAY_LABEL)
+
+    @app.get("/paper/autopilot/compare")
+    def autopilot_compare(account_id: str):
+        from quantlab.paper.compare import paper_vs_backtest
+
+        r = paper_vs_backtest(ctx, account_id)
+        r.pop("_series")
+        return envelope(r, mode="PAPER", label=REPLAY_LABEL)
 
     @app.get("/risk/events")
     def risk_events(account_id: str | None = None):

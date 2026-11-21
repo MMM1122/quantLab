@@ -203,6 +203,16 @@ CREATE TABLE IF NOT EXISTS portfolio_snapshots (
   holdings TEXT NOT NULL,
   UNIQUE(account_id, session_date)
 );
+CREATE TABLE IF NOT EXISTS autopilots (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id),
+  strategy TEXT NOT NULL,
+  params TEXT NOT NULL DEFAULT '{}',
+  symbols TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  state TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS risk_events (
   id TEXT PRIMARY KEY,
   account_id TEXT,

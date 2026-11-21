@@ -13,6 +13,7 @@
 - [x] Paper LIMIT orders, DAY/GTC time in force, fat-finger price band, SQLite schema migration v1→v2
 - [x] Deployment (Docker, Compose, Streamlit Cloud), API bearer token, snapshot refresh + revision detection
 - [x] Volatility-target overlay; statistical test module (JK/Memmel, block bootstrap, PSR/DSR)
+- [x] Paper strategy autopilot (risk-checked, drift trims, idempotent) + paper-vs-backtest consistency report
 
 ## Next (prioritised)
 | prio | item |

@@ -18,6 +18,8 @@
 * Walk-forward: each test fold starts in cash (re-entry cost at fold boundaries); sessions after
   the last full test fold are unused; grids are capped at 200 parameter sets.
 * Backtests have no volume cap; paper trading caps fills at 10% of session volume.
+* Paper cash checks do not count proceeds of pending sells, so an autopilot rotation can buy one session
+  later than the backtest (reported in the paper-vs-backtest explanations).
 * Dividends credited on the ex-date (pay date ignored) and held as cash (not reinvested).
 * Yahoo prices are split-adjusted retroactively; true as-traded prices are not available from it.
 * ETF-only universe reduces but does not remove survivorship/selection bias.
