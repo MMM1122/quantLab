@@ -287,6 +287,15 @@ def create_app(data_dir: str | None = None, ctx: AppContext | None = None, api_t
                                    "failure_reason")} for r in list_runs(ctx)]
         return envelope(rows, mode="BACKTEST")
 
+    @app.get("/backtests/compare")
+    def backtests_compare(run_ids: str, n_trials: int | None = None, seed: int = 0):
+        from quantlab.backtest.service import compare_runs
+
+        t0 = time.perf_counter()
+        ids = [x for x in run_ids.split(",") if x.strip()]
+        out = compare_runs(ctx, ids, n_trials, seed)
+        return envelope(out, t0, mode="BACKTEST", label=BACKTEST_LABEL, data_label=out["data_label"])
+
     @app.get("/backtests/{run_id}")
     def backtest(run_id: str):
         r = get_run(ctx, run_id)

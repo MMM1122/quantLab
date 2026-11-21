@@ -12,7 +12,8 @@ Local-first quantitative research, backtesting and **paper**-trading platform fo
 |---|---|
 | Market data | yfinance provider (split-adjusted OHLC, dividends, splits), seeded synthetic fixture, XNYS calendar, content-hashed read-only Parquet snapshots, dedupe, SQLite metadata, DuckDB queries |
 | Data quality | duplicates, missing sessions vs exchange calendar, non-session rows, OHLC bounds, non-positive/non-finite values, volume, stale tail, extreme returns (flag only), flatlines, split/adjustment consistency, provenance; quality gate blocks bad snapshots |
-| Strategies | Buy & Hold, SMA crossover (50/200), RSI mean reversion (Cutler RSI), 12-1 cross-sectional momentum — all causal (tested) |
+| Strategies | Buy & Hold, SMA crossover (50/200), RSI mean reversion (Cutler RSI), 12-1 cross-sectional momentum, volatility-target overlay (never levered) — all causal (tested) |
+| Statistics | Jobson–Korkie/Memmel Sharpe-difference test, paired block-bootstrap CI, probabilistic and deflated Sharpe (multiple-testing correction) |
 | Backtests | event-driven daily loop, next-open execution, slippage + commission, integer shares, cash/position invariants, dividends & splits without double counting, net/gross/benchmark metrics, Sharpe CI, reproducible runs with full provenance |
 | Walk-forward | parameter grid chosen on training windows only, evaluated on later unseen windows; stitched out-of-sample equity, OOS rank of chosen params, leakage test |
 | DQ-001 | missing/delayed/corrupted perturbations, strict / bounded / naive (research-only) policies, multi-seed CIs, derived snapshots, detection rates, reports |
@@ -42,7 +43,8 @@ quantlab data refresh --snapshot latest        # new snapshot + provider-revisio
 quantlab backtest run --strategy ma-crossover --symbol SPY --snapshot <snapshot_id>
 quantlab backtest run --strategy rsi --symbol SPY --param entry=25 --param exit=60
 quantlab backtest run --strategy momentum --symbols SPY QQQ IWM TLT GLD
-quantlab backtest compare --runs <run_a> <run_b>
+quantlab backtest compare --runs <run_a> <run_b> --stats --trials 20   # tests + deflated Sharpe
+quantlab backtest run --strategy vol-target --symbol SPY --param target_vol=0.10 --param base=sma-crossover
 quantlab report export --run <run_id> --format html     # md | html | csv | json
 
 # 3) research
@@ -130,7 +132,7 @@ token-protected API on every push (`.github/workflows/ci.yml`, job `docker`).
 ## Tests and checks
 ```bash
 ruff check .                         # lint
-pytest -q                            # 147 unit + integration tests (offline)
+pytest -q                            # 159 unit + integration tests (offline)
 bash scripts/smoke_test.sh           # lint + tests + CLI flow + API/Streamlit health
 python scripts/acceptance_test.py    # full end-to-end acceptance incl. restart persistence
 python scripts/acceptance_test.py --offline   # skip the yfinance attempt

@@ -15,6 +15,7 @@ from typing import Any
 
 from quantlab.ai.provider import LLMProvider, provider_from_env
 from quantlab.ai.tools import ReadOnlyResearchTools
+from quantlab.core.errors import QuantLabError
 from quantlab.core.labels import NOT_ADVICE
 
 ORDER_INTENT = re.compile(r"\b(buy|sell|place|submit|execute|send)\b.{0,40}\b(order|orders|trade|trades|shares|position)\b",
@@ -133,6 +134,20 @@ def explain_backtest(f: dict[str, Any]) -> str:
         lines.append(f"- Warning: {w}")
     lines.append(f"\n_{NOT_ADVICE} Backtests are simulations; past results do not predict future returns._")
     return "\n".join(lines)
+
+
+def stats_lines(st: dict[str, Any]) -> list[str]:
+    out = [f"- Statistical tests on {st['n_obs']} common sessions ({st['window'][0]} → {st['window'][1]}), "
+           f"reference {st['reference']}:"]
+    for p in st["pairwise"]:
+        verdict = "not significant" if (p["jk_p_value"] or 1) >= 0.05 else "significant at 5%"
+        out.append(f"  - {p['strategy']}: Sharpe difference {_num(p['sharpe_diff'])}, Jobson-Korkie p = "
+                   f"{_num(p['jk_p_value'], 3)} ({verdict}); bootstrap 95% CI {_num(p['bootstrap_ci_low'])} to "
+                   f"{_num(p['bootstrap_ci_high'])}.")
+    for k, d in st["deflated_sharpe"].items():
+        out.append(f"  - {k}: probability true Sharpe > 0 is {_num(d['psr_vs_zero'], 3)}; deflated for "
+                   f"{d['n_trials']} trials it is {_num(d['deflated_sharpe'], 3)}.")
+    return out
 
 
 def compare_backtests(fs: list[dict[str, Any]]) -> str:
@@ -266,8 +281,16 @@ class ResearchAssistant:
         if r := self._refuse_orders("compare", question):
             return r
         fs = self.tools.compare_backtests(run_ids)
-        return self._finish("compare_backtests", compare_backtests(fs), {"runs": fs}, [f["source"] for f in fs],
-                            question)
+        text = compare_backtests(fs)
+        context: dict[str, Any] = {"runs": fs}
+        try:
+            st = self.tools.compare_statistics(run_ids)
+            context["statistics"] = st
+            body, _, tail = text.rpartition("\n\n_")
+            text = body + "\n" + "\n".join(stats_lines(st)) + "\n\n_" + tail
+        except QuantLabError as exc:  # e.g. runs on non-overlapping windows
+            text += f"\n\n(Statistical tests not available: {exc})"
+        return self._finish("compare_backtests", text, context, [f["source"] for f in fs], question)
 
     def summarize_experiment(self, experiment_id: str, question: str | None = None) -> AssistantResponse:
         if r := self._refuse_orders("summarize", question):

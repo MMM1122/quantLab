@@ -22,6 +22,7 @@ Errors: `{"error": <type>, "detail": <message>}` with 422 (invalid input), 404 (
 | GET | `/strategies` | ids, params, warm-up, versions |
 | POST | `/backtests` | `{strategy, snapshot_id, symbols, start?, end?, capital, commission_bps, slippage_bps, price_mode, params, mode, seed}` → 202 + job id; `mode=LIVE` → 403 |
 | GET | `/backtests`, `/backtests/{id}`, `/backtests/{id}/trades` | stored results only |
+| GET | `/backtests/compare?run_ids=a,b[,c]&n_trials=` | Sharpe-difference tests vs first run + deflated Sharpe |
 | POST | `/experiments/dq-001` | → 202 + job id + experiment id |
 | POST | `/experiments/walk-forward` | `{snapshot_id, strategy, symbols, param_grid, train_sessions, test_sessions, embargo_sessions, expanding, objective}` → 202 |
 | GET | `/experiments`, `/experiments/{id}` | DQ-001 and walk-forward |

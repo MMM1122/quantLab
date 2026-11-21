@@ -174,7 +174,12 @@ def cmd_backtest_compare(args) -> int:
                                                "max_drawdown", "turnover_annual", "n_fills")}})
     if len({r["synthetic"] for r in rows}) > 1:
         print("WARNING: comparing runs on synthetic and real data", file=sys.stderr)
-    _print(rows)
+    if args.stats:
+        from quantlab.backtest.service import compare_runs
+
+        _print({"runs": rows, "statistics": compare_runs(ctx, args.runs, args.trials, args.seed)})
+    else:
+        _print(rows)
     return 0
 
 
@@ -232,7 +237,11 @@ def build_parser() -> argparse.ArgumentParser:
     br.set_defaults(func=cmd_backtest_run)
     bt.add_parser("list").set_defaults(func=cmd_backtest_list)
     bc = bt.add_parser("compare")
-    bc.add_argument("--runs", nargs="+", required=True)
+    bc.add_argument("--runs", nargs="+", required=True, help="first run is the reference")
+    bc.add_argument("--stats", action="store_true", help="Sharpe-difference tests and deflated Sharpe")
+    bc.add_argument("--trials", type=int, default=None,
+                    help="number of configurations really tried (for the deflated Sharpe); default = runs compared")
+    bc.add_argument("--seed", type=int, default=0)
     bc.set_defaults(func=cmd_backtest_compare)
 
     rp = sub.add_parser("report", help="exports").add_subparsers(dest="cmd", required=True)

@@ -5,7 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from quantlab.backtest.engine import BacktestConfig
-from quantlab.backtest.service import get_run, list_runs, load_artifact, run_and_store
+from quantlab.backtest.service import compare_runs, get_run, list_runs, load_artifact, run_and_store
 from quantlab.core.errors import QuantLabError
 from quantlab.reports import charts
 from quantlab.reports.export import backtest_html, backtest_markdown, metrics_table
@@ -147,4 +147,16 @@ with tab_compare:
             backtest_banner(True in synth)
             st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
             st.caption("Overlapping Sharpe confidence intervals mean the difference is not statistically distinguishable.")
+            st.subheader("Statistical tests (first selected run = reference)")
+            trials = st.number_input("Configurations really tried (for the deflated Sharpe)", min_value=len(chosen),
+                                     value=len(chosen), step=1, key="bl_trials")
+            try:
+                stt = compare_runs(ctx, [labels[k] for k in chosen], int(trials))
+                pw = pd.DataFrame(stt["pairwise"])
+                st.dataframe(pw, hide_index=True, width="stretch")
+                st.dataframe(pd.DataFrame(stt["deflated_sharpe"]).T.reset_index(names="run"), hide_index=True,
+                             width="stretch")
+                st.caption(" ".join(stt["notes"]) + (" " + " ".join(stt["warnings"]) if stt["warnings"] else ""))
+            except QuantLabError as exc:
+                st.info(f"Statistical tests unavailable: {exc}")
             st.plotly_chart(charts.equity_and_drawdown(curves, True in synth, "Comparison"), width="stretch")

@@ -18,7 +18,8 @@ from typing import Any
 from quantlab.core.errors import InputValidationError, NotFoundError
 from quantlab.core.ids import validate_uuid
 
-TOOL_NAMES = ("get_backtest_facts", "compare_backtests", "get_experiment_facts", "list_recent_backtests")
+TOOL_NAMES = ("get_backtest_facts", "compare_backtests", "compare_statistics", "get_experiment_facts",
+              "list_recent_backtests")
 NET_KEYS = ["total_return", "cagr", "annual_volatility", "sharpe", "sharpe_ci95_low", "sharpe_ci95_high", "sortino",
             "max_drawdown", "max_drawdown_duration_sessions", "turnover_annual", "time_in_market", "n_fills",
             "total_commission", "total_slippage_cost", "total_dividends", "final_nav", "initial_nav", "n_sessions",
@@ -86,6 +87,21 @@ class ReadOnlyResearchTools:
         if len(run_ids) < 2:
             raise InputValidationError("compare needs at least two run ids")
         return [self.get_backtest_facts(r) for r in run_ids]
+
+    def compare_statistics(self, run_ids: list[str], n_trials: int | None = None) -> dict[str, Any]:
+        """Read stored equity curves and run the statistical tests (read-only)."""
+        import pandas as pd
+
+        from quantlab.research.stat_tests import compare_strategies
+
+        navs = {}
+        for rid in run_ids:
+            r = self._one("SELECT id, strategy_name, artifact_uri FROM backtest_runs WHERE id=?", (validate_uuid(rid),))
+            if r is None:
+                raise NotFoundError(f"backtest {rid} not found")
+            eq = pd.read_parquet(Path(r["artifact_uri"]) / "equity.parquet").set_index("session")["nav"]
+            navs[f"{r['id'][:8]} {r['strategy_name']}"] = eq
+        return compare_strategies(navs, n_trials=n_trials, seed=0, n_boot=1000)
 
     def get_experiment_facts(self, experiment_id: str) -> dict[str, Any]:
         eid = validate_uuid(experiment_id, "experiment_id")

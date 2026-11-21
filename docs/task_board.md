@@ -11,6 +11,8 @@
 - [x] GitHub Actions CI (ruff, pytest, offline acceptance on Python 3.11 / 3.13)
 - [x] Walk-forward out-of-sample validation (train-only selection, leakage test, OOS rank diagnostic)
 - [x] Paper LIMIT orders, DAY/GTC time in force, fat-finger price band, SQLite schema migration v1→v2
+- [x] Deployment (Docker, Compose, Streamlit Cloud), API bearer token, snapshot refresh + revision detection
+- [x] Volatility-target overlay; statistical test module (JK/Memmel, block bootstrap, PSR/DSR)
 
 ## Next (prioritised)
 | prio | item |

@@ -193,4 +193,31 @@ def load_artifact(ctx: AppContext, run_id: str, name: str) -> pd.DataFrame:
     return pd.read_parquet(p)
 
 
+def compare_runs(ctx: AppContext, run_ids: list[str], n_trials: int | None = None, seed: int = 0,
+                 n_boot: int = 2000) -> dict[str, Any]:
+    """Statistical comparison of stored runs (first run = reference). Reads artifacts only."""
+    from quantlab.research.stat_tests import compare_strategies
+
+    if len(run_ids) < 2:
+        raise InputValidationError("compare needs at least two run ids")
+    runs = [get_run(ctx, r) for r in run_ids]
+    navs, meta = {}, {}
+    for r in runs:
+        if r["status"] != RunStatus.COMPLETED.value:
+            raise InputValidationError(f"run {r['id']} is {r['status']}")
+        key = f"{r['id'][:8]} {r['strategy_name']}"
+        navs[key] = load_artifact(ctx, r["id"], "equity").set_index("session")["nav"]
+        meta[key] = {"run_id": r["id"], "is_synthetic": bool(r["is_synthetic"]),
+                     "symbols": r["config"]["symbols"], "snapshot_id": r["snapshot_id"]}
+    out = compare_strategies(navs, n_trials=n_trials, seed=seed, n_boot=n_boot)
+    warnings = []
+    if len({m["is_synthetic"] for m in meta.values()}) > 1:
+        warnings.append("mixing synthetic and real-data runs: the comparison is not meaningful")
+    if len({m["snapshot_id"] for m in meta.values()}) > 1:
+        warnings.append("runs use different snapshots")
+    out.update({"runs": meta, "warnings": warnings, "label": BACKTEST_LABEL,
+                "data_label": data_label(any(m["is_synthetic"] for m in meta.values()))})
+    return clean_for_json(out)
+
+
 __all__ = ["ASSUMPTIONS", "BacktestConfig", "PriceMode", "run_and_store", "list_runs", "get_run", "load_artifact"]
