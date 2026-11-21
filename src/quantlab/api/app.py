@@ -95,6 +95,12 @@ class KillSwitchRequest(BaseModel):
     reason: str = ""
 
 
+class AIRequest(BaseModel):
+    task: Literal["explain", "compare", "summarize_experiment"]
+    ids: list[str] = Field(min_length=1)
+    question: str | None = Field(None, max_length=2000)
+
+
 class BacktestRequest(BaseModel):
     strategy: str
     snapshot_id: str
@@ -318,6 +324,22 @@ def create_app(data_dir: str | None = None, ctx: AppContext | None = None) -> Fa
     @app.get("/risk/events")
     def risk_events(account_id: str | None = None):
         return envelope(broker.risk_events(account_id), mode="PAPER")
+
+    @app.post("/ai/ask")
+    def ai_ask(req: AIRequest):
+        from quantlab.ai.assistant import ResearchAssistant
+
+        t0 = time.perf_counter()
+        a = ResearchAssistant(ctx.settings.db_path)
+        if req.task == "explain":
+            r = a.explain(req.ids[0], req.question)
+        elif req.task == "compare":
+            r = a.compare(req.ids, req.question)
+        else:
+            r = a.summarize_experiment(req.ids[0], req.question)
+        d = r.to_dict()
+        d.pop("facts")
+        return envelope(d, t0, mode="RESEARCH", source="stored results (read-only)")
 
     @app.get("/jobs/{job_id}")
     def job(job_id: str):
