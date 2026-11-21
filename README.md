@@ -36,6 +36,7 @@ quantlab data ingest --symbols SPY QQQ IWM GLD TLT --start 2015-01-01
 quantlab data ingest --symbols SPY QQQ IWM GLD TLT --start 2015-01-01 --end 2025-12-31 --fixture synthetic
 quantlab data list
 quantlab data check --snapshot <snapshot_id>
+quantlab data refresh --snapshot latest        # new snapshot + provider-revision report (real data only)
 
 # 2) backtests
 quantlab backtest run --strategy ma-crossover --symbol SPY --snapshot <snapshot_id>
@@ -69,10 +70,67 @@ streamlit run apps/dashboard/streamlit_app.py          # or: make dashboard
 uvicorn quantlab.api.app:app --port 8000               # or: make api  → http://127.0.0.1:8000/docs
 ```
 
+## Deployment
+
+QuantLab is a research and **paper**-trading tool. Every deployment option below keeps
+`LIVE_TRADING_ENABLED=false`, and there is no broker integration to switch on.
+
+| option | best for | persistence | effort |
+|---|---|---|---|
+| **A. Streamlit Community Cloud** | a shareable dashboard demo | ephemeral (lost on reboot/redeploy) | ~5 min, free |
+| **B. Docker Compose** (your machine or a VPS) | daily use, dashboard + API | persistent volume | ~10 min |
+| **C. Local** (see *Run* above) | development | `./data` | — |
+
+Serverless platforms such as Vercel are not a good fit: Streamlit needs a long-running process with
+websockets, and QuantLab needs a writable disk for SQLite and Parquet.
+
+### A. Streamlit Community Cloud
+1. Push to GitHub (already done for `MMM1122/quantLab`).
+2. Open <https://share.streamlit.io> → **Create app** → *Deploy a public app from GitHub*.
+3. Repository `MMM1122/quantLab`, branch `main`, main file path **`apps/dashboard/streamlit_app.py`**.
+4. **Advanced settings** → Python **3.12**. Optional **Secrets** (TOML; root-level keys become environment variables):
+   ```toml
+   LIVE_TRADING_ENABLED = "false"
+   # optional AI phrasing; without a key the assistant uses deterministic analytics
+   QUANTLAB_LLM_PROVIDER = "anthropic"
+   ANTHROPIC_API_KEY = "sk-ant-..."
+   ```
+5. Deploy. On first visit open **Market Explorer → Ingest data** (`yfinance` for real data, or the
+   labelled `synthetic` fixture).
+6. Notes:
+   - Storage is **ephemeral**: snapshots, runs and paper accounts disappear when the app restarts.
+     Export the reports you want to keep.
+   - Streamlit has no login. Anyone with the URL can ingest data and run jobs, so set the app's
+     sharing to **private / invited viewers** in the app settings.
+   - Dependencies come from `requirements.txt`; the entry file adds `src/` to the import path itself.
+
+### B. Docker Compose (persistent; dashboard + API)
+```bash
+git clone https://github.com/MMM1122/quantLab.git && cd quantLab
+cp .env.example .env                         # optional: QUANTLAB_API_TOKEN, LLM keys
+echo "QUANTLAB_API_TOKEN=$(openssl rand -hex 24)" >> .env   # recommended when the API is reachable by others
+GIT_COMMIT=$(git rev-parse HEAD) docker compose up -d --build
+# dashboard → http://127.0.0.1:8501     API → http://127.0.0.1:8000/docs
+docker compose exec dashboard quantlab data ingest --symbols SPY QQQ IWM GLD TLT --start 2015-01-01
+docker compose logs -f                       # follow logs
+docker compose down                          # stop (data stays in the `quantlab-data` volume)
+```
+- Data lives in the named volume `quantlab-data` (`/data` in the containers). Back it up with
+  `docker run --rm -v quantlab-data:/data -v "$PWD":/backup busybox tar czf /backup/quantlab-data.tgz /data`.
+- Both ports are bound to `127.0.0.1`. To serve on a VPS, put a reverse proxy with authentication
+  (e.g. Caddy/nginx basic auth or an SSO proxy) in front of `8501`, and keep `QUANTLAB_API_TOKEN` set.
+  API clients send `Authorization: Bearer <token>`.
+- Code version is baked into the image (`GIT_COMMIT`) so run provenance still records it.
+- Optional daily refresh (host cron), which reports provider revisions and exits 5 when it finds any:
+  `30 18 * * 1-5 cd ~/quantLab && docker compose exec -T dashboard quantlab data refresh --snapshot latest`
+
+Verification: CI builds this image, runs the CLI inside it, and health-checks the dashboard and the
+token-protected API on every push (`.github/workflows/ci.yml`, job `docker`).
+
 ## Tests and checks
 ```bash
 ruff check .                         # lint
-pytest -q                            # 141 unit + integration tests (offline)
+pytest -q                            # 147 unit + integration tests (offline)
 bash scripts/smoke_test.sh           # lint + tests + CLI flow + API/Streamlit health
 python scripts/acceptance_test.py    # full end-to-end acceptance incl. restart persistence
 python scripts/acceptance_test.py --offline   # skip the yfinance attempt

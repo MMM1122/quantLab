@@ -2,6 +2,9 @@
 
 Start: `uvicorn quantlab.api.app:app --host 127.0.0.1 --port 8000` → interactive docs at `/docs`.
 
+Auth: if `QUANTLAB_API_TOKEN` is set, send `Authorization: Bearer <token>` (401 otherwise); `/health`, `/docs`,
+`/openapi.json` stay public. Without a token the API is meant for `127.0.0.1` only.
+
 Every response: `{"data": ..., "meta": {"service", "version", "live_trading_enabled": false, "mode", ...}}`
 plus, where relevant, `label`, `data_label`, `assumptions`, `run_id`, `computation_seconds`, `source`.
 Errors: `{"error": <type>, "detail": <message>}` with 422 (invalid input), 404 (not found),
@@ -12,6 +15,8 @@ Errors: `{"error": <type>, "detail": <message>}` with 422 (invalid input), 404 (
 | GET | `/health` | DB reachable |
 | GET | `/assets` | universe + which snapshots contain each symbol |
 | POST | `/data/ingest` | `{symbols, start, end?, provider: yfinance|synthetic, seed}` → 202 + job id |
+| POST | `/data/refresh` | `{snapshot_id: <id>|latest, end?}` → 202; new snapshot + revision diff |
+| GET | `/data/lineage?snapshot_id=` | refresh history with diff totals |
 | GET | `/data/snapshots` | includes `quality_status`, `data_label` |
 | GET | `/data/quality/{snapshot_id}` | stored issues |
 | GET | `/strategies` | ids, params, warm-up, versions |

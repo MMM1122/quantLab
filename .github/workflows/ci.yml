@@ -31,3 +31,32 @@ jobs:
         run: pytest -q -p no:warnings -o addopts=""
       - name: Acceptance (offline)
         run: python scripts/acceptance_test.py --offline --data-dir "$RUNNER_TEMP/quantlab_acceptance"
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build --build-arg GIT_COMMIT=${{ github.sha }} -t quantlab:ci .
+      - name: CLI works inside the image (offline synthetic fixture)
+        run: |
+          docker volume create qldata
+          docker run --rm -v qldata:/data quantlab:ci quantlab data ingest --symbols SPY QQQ IWM GLD TLT \
+            --start 2015-01-01 --end 2025-12-31 --fixture synthetic
+          docker run --rm -v qldata:/data quantlab:ci quantlab backtest run --strategy ma-crossover --symbol SPY
+      - name: Dashboard and API become healthy
+        run: |
+          docker run -d --name dash -p 8501:8501 -v qldata:/data quantlab:ci
+          docker run -d --name api -p 8000:8000 -v qldata:/data -e QUANTLAB_API_TOKEN=ci-token quantlab:ci \
+            uvicorn quantlab.api.app:app --host 0.0.0.0 --port 8000
+          for i in $(seq 1 60); do
+            curl -sf localhost:8501/_stcore/health && curl -sf localhost:8000/health && break
+            sleep 2
+          done
+          curl -sf localhost:8501/_stcore/health
+          curl -sf localhost:8000/health
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8000/data/snapshots)" = "401"
+          curl -sf -H "Authorization: Bearer ci-token" localhost:8000/data/snapshots | grep -q SYNTHETIC
+      - name: Container logs on failure
+        if: failure()
+        run: docker logs dash; docker logs api
