@@ -95,6 +95,20 @@ class KillSwitchRequest(BaseModel):
     reason: str = ""
 
 
+class WalkForwardRequest(BaseModel):
+    snapshot_id: str
+    strategy: str
+    symbols: list[str] = Field(default_factory=lambda: ["SPY"], min_length=1)
+    param_grid: dict[str, list[Any]] = Field(default_factory=dict)
+    train_sessions: int = Field(756, ge=60)
+    test_sessions: int = Field(252, ge=20)
+    embargo_sessions: int = Field(0, ge=0)
+    expanding: bool = True
+    objective: Literal["sharpe", "cagr", "total_return", "calmar"] = "sharpe"
+    commission_bps: float = Field(1.0, ge=0)
+    slippage_bps: float = Field(2.0, ge=0)
+
+
 class AIRequest(BaseModel):
     task: Literal["explain", "compare", "summarize_experiment"]
     ids: list[str] = Field(min_length=1)
@@ -264,6 +278,24 @@ def create_app(data_dir: str | None = None, ctx: AppContext | None = None) -> Fa
             return eid
 
         jid = jobs.submit("experiment.dq001", req.model_dump(), work)
+        return envelope({"job_id": jid, "experiment_id": eid, "status": "PENDING"}, mode="RESEARCH",
+                        data_label=data_label(snap.is_synthetic))
+
+    @app.post("/experiments/walk-forward", status_code=202)
+    def create_walk_forward(req: WalkForwardRequest):
+        from quantlab.core.ids import new_id
+        from quantlab.research.walk_forward import WalkForwardConfig, run_walk_forward
+
+        snap = ctx.snapshots.get(req.snapshot_id)
+        cfg = WalkForwardConfig(snapshot_id=snap.id, **req.model_dump(exclude={"snapshot_id"}))
+        cfg.validate()
+        eid = new_id()
+
+        def work():
+            run_walk_forward(ctx, cfg, experiment_id=eid)
+            return eid
+
+        jid = jobs.submit("experiment.walk_forward", req.model_dump(), work)
         return envelope({"job_id": jid, "experiment_id": eid, "status": "PENDING"}, mode="RESEARCH",
                         data_label=data_label(snap.is_synthetic))
 

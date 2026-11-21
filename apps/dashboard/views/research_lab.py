@@ -18,17 +18,17 @@ from quantlab.research.perturbations import DEFAULT_SCENARIOS
 from quantlab.research.policies import POLICIES
 from quantlab.strategies.registry import STRATEGIES
 from quantlab.ui.common import backtest_banner, df_download, get_ctx, safety_banner, snapshot_selector
+from quantlab.ui.walk_forward_tab import walk_forward_tab
 
 ctx = get_ctx()
-st.title("Research Lab — DQ-001")
+st.title("Research Lab")
 safety_banner()
-st.markdown(f"**Hypothesis.** {HYPOTHESIS}")
-with st.expander("Missing-data rules and policies"):
-    st.markdown("\n".join(f"- {r}" for r in MISSING_DATA_RULES))
-    st.caption(f"`naive_ffill` is a {RESEARCH_ONLY_LABEL}.")
-
-tab_run, tab_res = st.tabs(["Run experiment", "Results"])
+tab_run, tab_res, tab_wf = st.tabs(["DQ-001: run", "DQ-001: results", "Walk-forward validation"])
 with tab_run:
+    st.markdown(f"**Hypothesis.** {HYPOTHESIS}")
+    with st.expander("Missing-data rules and policies"):
+        st.markdown("\n".join(f"- {r}" for r in MISSING_DATA_RULES))
+        st.caption(f"`naive_ffill` is a {RESEARCH_ONLY_LABEL}.")
     snap = snapshot_selector(ctx, "rl_snap", require_tradable=True)
     if snap is not None:
         with st.form("dq_form"):
@@ -58,14 +58,14 @@ with tab_run:
             except (QuantLabError, ValueError) as exc:
                 st.error(f"Experiment failed: {exc}")
 
-with tab_res:
-    exps = [e for e in list_experiments(ctx) if e["status"] == "COMPLETED"]
+def dq_results():
+    exps = [e for e in list_experiments(ctx) if e["status"] == "COMPLETED" and e["code"] == "DQ-001"]
     failed = [e for e in list_experiments(ctx) if e["status"] == "FAILED"]
     if failed:
         st.caption(f"{len(failed)} failed experiment(s): " + "; ".join(f"{e['id'][:8]}: {e['failure_reason']}" for e in failed[:3]))
     if not exps:
-        st.info("No completed experiments yet.")
-        st.stop()
+        st.info("No completed DQ-001 experiments yet.")
+        return
     labels = {f"{e['id'][:8]} · {e['code']} · {e['completed_at'][:19]}": e["id"] for e in exps}
     sel = st.session_state.get("rl_selected")
     keys = list(labels)
@@ -108,3 +108,10 @@ with tab_res:
         df_download(runs, "Runs CSV", f"dq001_runs_{eid[:8]}.csv", "rl_csv", hdr)
     c[1].download_button("Report (Markdown)", experiment_markdown(exp), f"dq001_{eid[:8]}.md", key="rl_md")
     c[2].download_button("Report (HTML)", experiment_html(exp), f"dq001_{eid[:8]}.html", key="rl_html")
+
+
+with tab_res:
+    dq_results()
+
+with tab_wf:
+    walk_forward_tab(ctx)

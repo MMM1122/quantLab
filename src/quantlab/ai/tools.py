@@ -95,6 +95,8 @@ class ReadOnlyResearchTools:
         if r["status"] != "COMPLETED":
             raise InputValidationError(f"experiment {eid} is {r['status']}")
         res = json.loads(r["results"])
+        if r["code"] == "WALK-FORWARD":
+            return self._walkforward_facts(eid, res)
         facts: dict[str, Any] = {}
         for a in res["aggregate"]:
             key = f"{a['strategy']}|{a['scenario']}|{a['policy']}"
@@ -113,4 +115,26 @@ class ReadOnlyResearchTools:
             "label": res["label"], "seeds": res["design"]["config"]["seeds"], "symbol": res["design"]["config"]["symbol"],
             "aggregate": res["aggregate"], "findings": res["findings"], "facts": facts,
             "research_only_policies": res.get("research_only_policies", {}),
+        }
+
+    @staticmethod
+    def _walkforward_facts(eid: str, res: dict[str, Any]) -> dict[str, Any]:
+        facts: dict[str, Any] = {}
+        for k in NET_KEYS:
+            if res["oos_metrics"].get(k) is not None:
+                facts[f"oos.{k}"] = res["oos_metrics"][k]
+            if (res.get("benchmark_metrics") or {}).get(k) is not None:
+                facts[f"benchmark.{k}"] = res["benchmark_metrics"][k]
+        for f in res["folds"]:
+            for k in ("train_objective", "test_objective", "test_total_return", "oos_percentile_rank"):
+                if f.get(k) is not None:
+                    facts[f"fold{f['fold']}.{k}"] = f[k]
+        if res.get("mean_oos_percentile_rank") is not None:
+            facts["mean_oos_percentile_rank"] = res["mean_oos_percentile_rank"]
+        return {
+            "kind": "walkforward", "experiment_id": eid, "code": res["code"], "source": f"experiments/{eid}.results",
+            "strategy": res["strategy"], "symbols": res["symbols"], "objective": res["objective"],
+            "window": res["evaluation_window"], "n_folds": len(res["folds"]), "n_configs": res["n_configs"],
+            "chosen_params": [f["chosen_params"] for f in res["folds"]], "is_synthetic": res["is_synthetic"],
+            "data_label": res["data_label"], "label": res["label"], "findings": res["findings"], "facts": facts,
         }
