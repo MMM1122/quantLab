@@ -13,6 +13,10 @@
 
 ## Modelling
 * Fill model = next open ± fixed slippage; no market impact, no queue position, no halts.
+* Paper LIMIT orders on daily bars: filled at the open if it is better than the limit, otherwise at
+  the limit only if the bar trades *through* it (touching is not a fill); intraday path unknown.
+* Walk-forward: each test fold starts in cash (re-entry cost at fold boundaries); sessions after
+  the last full test fold are unused; grids are capped at 200 parameter sets.
 * Backtests have no volume cap; paper trading caps fills at 10% of session volume.
 * Dividends credited on the ex-date (pay date ignored) and held as cash (not reinvested).
 * Yahoo prices are split-adjusted retroactively; true as-traded prices are not available from it.
@@ -24,7 +28,7 @@
 
 ## Product scope not implemented (V1)
 * FastAPI auth (local single user only), PostgreSQL/Alembic migrations (SQLite schema is
-  versioned via `PRAGMA user_version`), Next.js UI, walk-forward optimisation UI, LIMIT orders,
+  versioned via `PRAGMA user_version` with forward migrations), Next.js UI, stop orders,
   broker adapters (IBKR etc.), live trading, scheduler for automatic daily ingestion.
 
 ## Tested versions

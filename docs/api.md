@@ -18,11 +18,12 @@ Errors: `{"error": <type>, "detail": <message>}` with 422 (invalid input), 404 (
 | POST | `/backtests` | `{strategy, snapshot_id, symbols, start?, end?, capital, commission_bps, slippage_bps, price_mode, params, mode, seed}` → 202 + job id; `mode=LIVE` → 403 |
 | GET | `/backtests`, `/backtests/{id}`, `/backtests/{id}/trades` | stored results only |
 | POST | `/experiments/dq-001` | → 202 + job id + experiment id |
-| GET | `/experiments`, `/experiments/{id}` | |
+| POST | `/experiments/walk-forward` | `{snapshot_id, strategy, symbols, param_grid, train_sessions, test_sessions, embargo_sessions, expanding, objective}` → 202 |
+| GET | `/experiments`, `/experiments/{id}` | DQ-001 and walk-forward |
 | GET | `/jobs/{job_id}` | PENDING / RUNNING / COMPLETED / FAILED (+ error) |
 | POST | `/paper/accounts` | create PAPER account on a snapshot (historical replay) |
 | GET | `/paper/account?account_id=` | one account or all |
-| POST | `/paper/orders` | market orders only; risk-checked before creation |
+| POST | `/paper/orders` | `{account_id, symbol, side, quantity, client_order_id?, order_type: MARKET|LIMIT, limit_price?, time_in_force: GTC|DAY}`; risk-checked before creation |
 | GET | `/paper/orders?account_id=` | |
 | POST | `/paper/advance` | `{account_id, sessions}` step the replay clock |
 | POST | `/paper/kill-switch` | `{account_id, active, reason}` |

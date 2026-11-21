@@ -14,8 +14,9 @@ Local-first quantitative research, backtesting and **paper**-trading platform fo
 | Data quality | duplicates, missing sessions vs exchange calendar, non-session rows, OHLC bounds, non-positive/non-finite values, volume, stale tail, extreme returns (flag only), flatlines, split/adjustment consistency, provenance; quality gate blocks bad snapshots |
 | Strategies | Buy & Hold, SMA crossover (50/200), RSI mean reversion (Cutler RSI), 12-1 cross-sectional momentum — all causal (tested) |
 | Backtests | event-driven daily loop, next-open execution, slippage + commission, integer shares, cash/position invariants, dividends & splits without double counting, net/gross/benchmark metrics, Sharpe CI, reproducible runs with full provenance |
+| Walk-forward | parameter grid chosen on training windows only, evaluated on later unseen windows; stitched out-of-sample equity, OOS rank of chosen params, leakage test |
 | DQ-001 | missing/delayed/corrupted perturbations, strict / bounded / naive (research-only) policies, multi-seed CIs, derived snapshots, detection rates, reports |
-| Paper trading | PAPER-only accounts on historical replay, Decimal ledger, pre-trade risk (no shorting, no margin/negative cash, ≤25% per asset, stale data, duplicates, kill switch), idempotent orders & fills, partial fills, reconciliation, persistence across restarts |
+| Paper trading | PAPER-only accounts on historical replay, Decimal ledger, MARKET and LIMIT orders with DAY/GTC, pre-trade risk (no shorting, no margin/negative cash, ≤25% per asset, stale data, duplicates, limit price band, kill switch), idempotent orders & fills, partial fills, reconciliation, persistence across restarts |
 | AI assistant | read-only tools (SQLite `mode=ro`), deterministic analytics without a key, optional Anthropic/OpenAI phrasing with every number verified against stored data, refuses order requests |
 | Interfaces | Streamlit (Overview, Market Explorer, Strategy Studio, Backtest Lab, Research Lab, Paper Trading, AI Assistant), FastAPI with jobs, CLI, CSV/JSON/Markdown/HTML exports |
 
@@ -45,11 +46,14 @@ quantlab report export --run <run_id> --format html     # md | html | csv | json
 
 # 3) research
 quantlab experiment run --id dq-001 --snapshot <snapshot_id>
+quantlab experiment run --id walk-forward --snapshot <snapshot_id> --strategy sma-crossover \
+    --grid '{"fast": [20, 50], "slow": [100, 200]}' --train 756 --test 252
 quantlab experiment export --experiment <experiment_id> --format md
 
 # 4) paper trading (historical replay)
 quantlab paper create --name demo --snapshot <snapshot_id> --cash 10000 --start 2024-01-02
 quantlab paper order --account <account_id> --symbol SPY --side BUY --quantity 5 --client-order-id my-1
+quantlab paper order --account <account_id> --symbol SPY --side BUY --quantity 5 --type LIMIT --limit-price 470.50 --tif DAY
 quantlab paper advance --account <account_id> --sessions 5
 quantlab paper status --account <account_id>
 quantlab paper kill-switch --account <account_id> on --reason "manual stop"
@@ -68,7 +72,7 @@ uvicorn quantlab.api.app:app --port 8000               # or: make api  → http:
 ## Tests and checks
 ```bash
 ruff check .                         # lint
-pytest -q                            # 126 unit + integration tests (offline)
+pytest -q                            # 141 unit + integration tests (offline)
 bash scripts/smoke_test.sh           # lint + tests + CLI flow + API/Streamlit health
 python scripts/acceptance_test.py    # full end-to-end acceptance incl. restart persistence
 python scripts/acceptance_test.py --offline   # skip the yfinance attempt

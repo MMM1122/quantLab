@@ -7,3 +7,4 @@ participation_rate: 0.10      # max fraction of a session's volume one order may
 commission_bps: 1.0
 min_commission: 0.0
 slippage_bps: 2.0
+limit_price_band: 0.20       # reject LIMIT prices more than 20% away from the last close (fat-finger guard)

@@ -80,7 +80,9 @@ class PaperOrderRequest(BaseModel):
     side: Literal["BUY", "SELL"]
     quantity: int = Field(gt=0)
     client_order_id: str | None = Field(None, max_length=64)
-    order_type: str = "MARKET"
+    order_type: Literal["MARKET", "LIMIT"] = "MARKET"
+    limit_price: str | None = None
+    time_in_force: Literal["DAY", "GTC"] = "GTC"
     mode: str = "PAPER"
 
 
@@ -335,7 +337,8 @@ def create_app(data_dir: str | None = None, ctx: AppContext | None = None) -> Fa
     def paper_order(req: PaperOrderRequest):
         reject_live(req.mode)
         o = broker.submit_order(req.account_id, req.symbol, req.side, req.quantity, req.client_order_id,
-                                req.order_type, actor="api", mode=req.mode)
+                                req.order_type, actor="api", mode=req.mode, limit_price=req.limit_price,
+                                time_in_force=req.time_in_force)
         return envelope(o, mode="PAPER", label=REPLAY_LABEL)
 
     @app.get("/paper/orders")

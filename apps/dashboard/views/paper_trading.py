@@ -57,18 +57,24 @@ st.caption(f"Risk limits: {state['risk_limits']} · no shorting · no margin · 
 
 left, right = st.columns([1, 1])
 with left:
-    st.subheader("Order ticket (market, fills next session open)")
+    st.subheader("Order ticket (executable from the next replay session)")
     with st.form("pt_order"):
         snap_syms = ctx.snapshots.get(state["snapshot_id"]).symbols
         c1, c2, c3 = st.columns(3)
         sym = c1.selectbox("Symbol", snap_syms)
         side = c2.radio("Side", ["BUY", "SELL"], horizontal=True)
         qty = c3.number_input("Shares", min_value=1, value=1, step=1)
+        c1, c2, c3 = st.columns(3)
+        otype = c1.radio("Type", ["MARKET", "LIMIT"], horizontal=True)
+        lpx = c2.text_input("Limit price (LIMIT only)", "")
+        tif = c3.radio("Time in force", ["GTC", "DAY"], horizontal=True)
         coid = st.text_input("Client order id (idempotency key)", str(uuid.uuid4()))
         submit = st.form_submit_button("Submit paper order")
     if submit:
         try:
-            o = broker.submit_order(aid, sym, side, int(qty), coid, actor="dashboard")
+            o = broker.submit_order(aid, sym, side, int(qty), coid, order_type=otype, actor="dashboard",
+                                    limit_price=(lpx.strip() or None) if otype == "LIMIT" else None,
+                                    time_in_force=tif)
             if o["status"] == "REJECTED":
                 st.error(f"Rejected by risk checks: {o['reason']}")
             elif o.get("idempotent_replay"):

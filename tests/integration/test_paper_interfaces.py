@@ -76,3 +76,23 @@ def test_paper_cli_and_dashboard(ctx, snap, capsys, monkeypatch):
     adv.click().run()
     assert not at.exception
     assert any("Advanced to" in s.value for s in at.success)
+
+
+def test_limit_orders_via_api_and_cli(ctx, snap, capsys):
+    from quantlab.api.app import create_app
+    from quantlab.cli.main import main as cli
+
+    with TestClient(create_app(ctx=ctx)) as c:
+        aid = c.post("/paper/accounts", json={"name": "l", "snapshot_id": snap.id}).json()["data"]["id"]
+        state = c.get("/paper/account", params={"account_id": aid}).json()["data"]
+        assert state["holdings"] == []
+        o = c.post("/paper/orders", json={"account_id": aid, "symbol": "SPY", "side": "BUY", "quantity": 1,
+                                          "order_type": "LIMIT", "limit_price": "1.00"}).json()["data"]
+        assert o["status"] == "REJECTED" and o["reason"].startswith("LIMIT_PRICE_OUT_OF_BAND")
+        bad = c.post("/paper/orders", json={"account_id": aid, "symbol": "SPY", "side": "BUY", "quantity": 1,
+                                            "order_type": "LIMIT"})
+        assert bad.status_code == 422
+    dd = ["--data-dir", str(ctx.settings.data_dir)]
+    assert cli([*dd, "paper", "order", "--account", aid, "--symbol", "SPY", "--side", "BUY", "--quantity", "1",
+                "--type", "MARKET", "--tif", "DAY"]) == 0
+    assert json.loads(capsys.readouterr().out)["time_in_force"] == "DAY"

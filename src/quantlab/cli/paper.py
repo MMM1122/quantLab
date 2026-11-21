@@ -37,7 +37,8 @@ def cmd_status(args) -> int:
 
 def cmd_order(args) -> int:
     b = _broker(args)
-    o = b.submit_order(args.account, args.symbol, args.side, args.quantity, args.client_order_id, actor="cli")
+    o = b.submit_order(args.account, args.symbol, args.side, args.quantity, args.client_order_id,
+                       order_type=args.type, actor="cli", limit_price=args.limit_price, time_in_force=args.tif)
     _print(o)
     return 0 if o["status"] != "REJECTED" else 3
 
@@ -88,6 +89,9 @@ def register(sub) -> None:
     o.add_argument("--side", choices=["BUY", "SELL", "buy", "sell"], required=True)
     o.add_argument("--quantity", required=True)
     o.add_argument("--client-order-id", default=None)
+    o.add_argument("--type", choices=["MARKET", "LIMIT"], default="MARKET")
+    o.add_argument("--limit-price", default=None)
+    o.add_argument("--tif", choices=["DAY", "GTC"], default="GTC", help="time in force")
     o.set_defaults(func=cmd_order)
     x = p.add_parser("cancel")
     x.add_argument("--account", required=True)
