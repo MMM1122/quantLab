@@ -7,6 +7,8 @@ claims mode=LIVE is rejected.
 
 from __future__ import annotations
 
+import hmac
+import os
 import time
 from typing import Any, Literal
 
@@ -52,6 +54,11 @@ class IngestRequest(BaseModel):
     end: str | None = None
     provider: Literal["yfinance", "synthetic"] = "synthetic"
     seed: int = 7
+
+
+class RefreshRequest(BaseModel):
+    snapshot_id: str = "latest"
+    end: str | None = None
 
 
 class DQ001Request(BaseModel):
@@ -142,13 +149,32 @@ def reject_live(mode: str) -> None:
         raise InputValidationError(f"unknown mode {mode!r}")
 
 
-def create_app(data_dir: str | None = None, ctx: AppContext | None = None) -> FastAPI:
+PUBLIC_PATHS = {"/health", "/docs", "/openapi.json", "/docs/oauth2-redirect", "/redoc"}
+
+
+def create_app(data_dir: str | None = None, ctx: AppContext | None = None, api_token: str | None = None) -> FastAPI:
+    """Build the app. If ``api_token`` (or env ``QUANTLAB_API_TOKEN``) is set, every non-public
+    endpoint requires ``Authorization: Bearer <token>``. Without a token the API is meant for
+    127.0.0.1 only (the default bind address)."""
     ctx = ctx or build_context(data_dir)
+    token = api_token if api_token is not None else os.environ.get("QUANTLAB_API_TOKEN", "").strip()
     jobs = JobRunner(ctx)
     app = FastAPI(title="QuantLab API", version=quantlab.__version__,
                   description="Local research/backtest/paper API. No live trading.")
     app.state.ctx = ctx
     app.state.jobs = jobs
+    app.state.auth_required = bool(token)
+
+    @app.middleware("http")
+    async def _auth(request: Request, call_next):
+        if token and request.url.path not in PUBLIC_PATHS:
+            header = request.headers.get("authorization", "")
+            given = header[7:] if header.lower().startswith("bearer ") else ""
+            if not hmac.compare_digest(given.encode(), token.encode()):
+                return JSONResponse(status_code=401, content={"error": "Unauthorized",
+                                                              "detail": "missing or invalid bearer token",
+                                                              "meta": _meta()})
+        return await call_next(request)
 
     status_map = {
         InputValidationError: 422,
@@ -169,7 +195,7 @@ def create_app(data_dir: str | None = None, ctx: AppContext | None = None) -> Fa
     @app.get("/health")
     def health():
         ctx.db.query_one("SELECT 1 AS ok")
-        return envelope({"status": "ok", "db": str(ctx.settings.db_path)}, mode="SYSTEM")
+        return envelope({"status": "ok", "auth_required": bool(token)}, mode="SYSTEM")
 
     @app.get("/assets")
     def assets():
@@ -192,6 +218,26 @@ def create_app(data_dir: str | None = None, ctx: AppContext | None = None) -> Fa
 
         jid = jobs.submit("data.ingest", req.model_dump(), work)
         return envelope({"job_id": jid, "status": "PENDING"}, mode="RESEARCH", source=req.provider)
+
+    @app.post("/data/refresh", status_code=202)
+    def data_refresh(req: RefreshRequest):
+        from quantlab.data.providers import YFinanceProvider
+        from quantlab.data.refresh import refresh_snapshot
+
+        if req.snapshot_id != "latest":
+            ctx.snapshots.get(req.snapshot_id)
+
+        def work():
+            return refresh_snapshot(ctx, req.snapshot_id, YFinanceProvider(), req.end).new_snapshot_id
+
+        jid = jobs.submit("data.refresh", req.model_dump(), work)
+        return envelope({"job_id": jid, "status": "PENDING"}, mode="RESEARCH", source="yfinance")
+
+    @app.get("/data/lineage")
+    def data_lineage(snapshot_id: str | None = None):
+        from quantlab.data.refresh import lineage
+
+        return envelope(lineage(ctx, snapshot_id), mode="RESEARCH")
 
     @app.get("/data/snapshots")
     def snapshots():

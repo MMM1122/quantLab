@@ -86,6 +86,18 @@ def cmd_data_check(args) -> int:
     return 1 if rep.blocking else 0
 
 
+def cmd_data_refresh(args) -> int:
+    from quantlab.data.providers import YFinanceProvider
+    from quantlab.data.refresh import refresh_snapshot
+
+    ctx = _ctx(args)
+    res = refresh_snapshot(ctx, args.snapshot, YFinanceProvider(), args.end)
+    _print({"base_snapshot_id": res.base_snapshot_id, "new_snapshot_id": res.new_snapshot_id,
+            "created": res.ingest.created, "quality": res.ingest.quality.status, "status": res.diff["status"],
+            "totals": res.diff["totals"], "range": [res.ingest.snapshot.start, res.ingest.snapshot.end]})
+    return 5 if res.diff["status"] == "REVISIONS_DETECTED" else 0
+
+
 def cmd_data_list(args) -> int:
     ctx = _ctx(args)
     _print([{"id": s.id, "provider": s.provider, "synthetic": s.is_synthetic, "symbols": s.symbols,
@@ -194,6 +206,10 @@ def build_parser() -> argparse.ArgumentParser:
     dc.add_argument("--snapshot", required=True)
     dc.set_defaults(func=cmd_data_check)
     data.add_parser("list", help="list snapshots").set_defaults(func=cmd_data_list)
+    dr = data.add_parser("refresh", help="re-download a real snapshot into a new one and report provider revisions")
+    dr.add_argument("--snapshot", default="latest", help="snapshot id or 'latest' (most recent real snapshot)")
+    dr.add_argument("--end", default=None, help="default: last completed XNYS session")
+    dr.set_defaults(func=cmd_data_refresh)
 
     bt = sub.add_parser("backtest", help="backtests").add_subparsers(dest="cmd", required=True)
     br = bt.add_parser("run")

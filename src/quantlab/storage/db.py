@@ -47,6 +47,13 @@ CREATE TABLE IF NOT EXISTS data_snapshots (
   quality_status TEXT,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS snapshot_lineage (
+  id TEXT PRIMARY KEY,
+  base_snapshot_id TEXT NOT NULL REFERENCES data_snapshots(id),
+  new_snapshot_id TEXT NOT NULL REFERENCES data_snapshots(id),
+  diff TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS quality_issues (
   id TEXT PRIMARY KEY,
   snapshot_id TEXT NOT NULL REFERENCES data_snapshots(id),
