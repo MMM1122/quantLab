@@ -59,6 +59,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-dir", default=None)
     ap.add_argument("--offline", action="store_true", help="skip the yfinance attempt")
+    ap.add_argument("--require-real", action="store_true",
+                    help="fail instead of falling back to the synthetic fixture when real data is unavailable")
     args = ap.parse_args()
     data_dir = Path(args.data_dir or tempfile.mkdtemp(prefix="quantlab_acceptance_")).resolve()
     os.environ["QUANTLAB_DATA_DIR"] = str(data_dir)
@@ -94,6 +96,8 @@ def main() -> int:
                         "range": [r.snapshot.start, r.snapshot.end], "quality": r.quality.status,
                         "hash": r.snapshot.dataset_hash}
             except DataUnavailableError as exc:
+                if args.require_real:
+                    raise
                 state["limitations"].append(f"Real data unavailable ({str(exc)[:160]}); used SYNTHETIC fixture.")
         r = ingest(universe, "2015-01-01", "2025-12-31", SyntheticProvider(seed=7), ctx.snapshots, ctx.db)
         state["snapshot"] = r.snapshot
