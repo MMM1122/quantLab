@@ -4,8 +4,9 @@ Status as of 2026-11-21. Every claim below was exercised by an automated test or
 Anything not tested is listed under *Not verified*.
 
 > Research and simulation only. No live trading, no broker connection, not investment advice.
-> All performance numbers in this report come from the **SYNTHETIC — NOT REAL MARKET PERFORMANCE**
-> fixture, because the build environment could not reach Yahoo Finance.
+> The development sandbox could not reach Yahoo Finance. Real data was verified instead by the
+> GitHub Actions workflow `real-data.yml` (see §4b). Sections that say so use the
+> **SYNTHETIC — NOT REAL MARKET PERFORMANCE** fixture.
 
 ## 1. Implemented features
 | area | implemented and tested |
@@ -77,15 +78,31 @@ Acceptance evidence (SYNTHETIC fixture, SPY, 2016-01-04 → 2025-12-31, 1 bp com
 
 DQ-001 ran 96 backtests. The paper account ended with cash 8,505.24 USD and NAV 9,941.99 USD, verified independently against the ledger. Shorting, oversized and above-25% orders were rejected as expected. A restart (new Python process and two API server processes) reproduced the identical state. These numbers describe the synthetic fixture only and say nothing about real markets.
 
+## 4b. Real-data acceptance (GitHub Actions, `real-data.yml`, `--require-real`, run 44983196737)
+- Real yfinance snapshot: SPY, QQQ, IWM, TLT and GLD, 14,950 rows, 2015-01-02 → 2026-11-20. Quality **PASSED with 0 warnings**; hash re-verified.
+- **8/8 acceptance steps PASS on real data**. The paper account ended with cash 7,609.61 USD and NAV 9,997.45 USD (verified against the ledger). Restarting the Python process and the API reproduced the same state.
+- SPY, 2016-01-04 → 2026-11-20, 1 bp commission + 2 bp slippage. Dividends are held as cash and not reinvested:
+
+| strategy | total return | CAGR | Sharpe (95% CI) | max DD | turnover/yr | fills |
+|---|---|---|---|---|---|---|
+| Buy & Hold | 270.83% | 12.82% | 0.82 (0.22 … 1.41) | −31.57% | 0.04 | 1 |
+| SMA 50/200 | 136.03% | 8.23% | 0.61 (0.02 … 1.21) | −33.12% | 0.85 | 11 |
+| RSI mean reversion | 116.20% | 7.36% | 0.63 (0.03 … 1.22) | −28.30% | 5.96 | 68 |
+
+- Real USDCAD (`CAD=X`): 2,986 sessions, quality PASSED with one warning (a few sessions without a rate; for 4 sessions in the evaluation window the conversion used the previous session's rate). In the CAD view, SPY buy & hold returned +283.64% in CAD versus +270.83% in USD.
+- `data refresh` on the real snapshot reported `UPDATED` with 0 raw revisions and 5 rows where only `adj_close` changed.
+- **Bug found by real data and fixed:** Yahoo timestamps `CAD=X` daily bars at London midnight. Converting those timestamps to New York time moved every rate to the previous calendar day, so about 20% of sessions had no rate. FX bars now keep the provider's local date. A test reproduces the bug and fails on the old code.
+- These are historical backtests, not predictions or advice.
+
 ## 5. Not verified / limitations
-- **Real Yahoo data** (ETFs and `CAD=X`) and **real LLM calls** were not exercised: the build sandbox has no network access to them. Those paths are tested with mocked responses.
+- **Real LLM calls** were not exercised (no API key or network access). The adapters are tested with mocked HTTP responses.
 - The **Streamlit Community Cloud** deployment was not performed; it requires the owner's account.
 - Modelling simplifications: next-open fills with fixed slippage; no market impact; dividends held as cash; Yahoo prices are retroactively split-adjusted; no taxes or FX conversion costs; few seeds in DQ-001. See `docs/limitations.md`.
 
 ## 6. Remaining tasks
 | priority | task |
 |---|---|
-| P0 | Merge PRs #1 → #6 into `main` (needs the repository owner; the agent's merge attempts were blocked by permissions) and tag `v1.0.0` |
-| P0 | Run `python scripts/acceptance_test.py` with real data on a networked machine; review quality warnings and refresh diffs |
+| done | PRs #1–#6 merged via #7 (`main` 99d7966). The `v1.0.0` tag and GitHub Release still need to be created by the owner (the session could not push tags or create releases) |
+| done | Real-data acceptance passed on GitHub runners (§4b). To re-run it: Actions → *Real-data acceptance* → *Run workflow* |
 | P1 (deliberately not done) | PostgreSQL/Alembic and a Next.js UI. These were P1 in the original specification, but the project's tech stack names SQLite and Streamlit and forbids unnecessary infrastructure, so they were not built for a single-user local tool |
 | P2 | Broker adapter interface tests only. Live trading stays disabled pending a separate, human-approved release |

@@ -1,11 +1,9 @@
 # Limitations (honest list)
 
 ## Not verified in the build environment
-* **Real market data was not downloaded during development.** The build sandbox blocks Yahoo
-  Finance (HTTP 403 via proxy). The yfinance provider is implemented and tested against mocked
-  responses; the acceptance test attempts a real download first and records the fallback to the
-  labelled synthetic fixture when it fails. Run `quantlab data ingest --symbols SPY QQQ IWM GLD TLT
-  --start 2015-01-01` on your machine to use real data.
+* Real market data could not be downloaded in the development sandbox, but it **is verified on
+  GitHub runners** by `.github/workflows/real-data.yml` (manual or PR-triggered, `--require-real`).
+  See `docs/FINAL_REPORT.md` §4b for the real-data evidence.
 * **LLM providers were not called for real** (no API key, no network). Adapters are tested with
   mocked HTTP transports; the assistant runs in deterministic mode without a key.
 * The dashboard was tested with Streamlit's `AppTest` harness and a live server health check, not
