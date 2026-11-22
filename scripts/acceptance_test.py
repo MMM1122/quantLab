@@ -45,6 +45,7 @@ def step(name):
                 STEPS.append({"step": name, "status": "PASS", "seconds": round(time.perf_counter() - t0, 2),
                               "evidence": ev})
                 print(f"[PASS] {name}")
+                print("       evidence: " + json.dumps(ev, default=str)[:1500])
                 return ev
             except Exception as exc:
                 STEPS.append({"step": name, "status": "FAIL", "seconds": round(time.perf_counter() - t0, 2),

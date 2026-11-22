@@ -35,14 +35,17 @@ jobs:
       - name: Real USDCAD, CAD metrics, refresh and data check
         if: always()
         run: |
-          set -x
+          set -x -o pipefail
           quantlab --data-dir "$QL_DATA" data list > "$QL_DATA/exports/snapshots.json"
           quantlab --data-dir "$QL_DATA" data ingest-fx --start 2015-01-01 | tee "$QL_DATA/exports/fx_ingest.json"
           RUN=$(quantlab --data-dir "$QL_DATA" backtest list | python -c "import json,sys; print(json.load(sys.stdin)[0]['id'])")
           quantlab --data-dir "$QL_DATA" backtest show --run "$RUN" --currency CAD | tee "$QL_DATA/exports/cad_metrics.json"
           SNAP=$(python -c "import json; s=[x for x in json.load(open('$QL_DATA/exports/snapshots.json')) if not x['synthetic'] and not x['parent_id']]; print(s[0]['id'])")
           quantlab --data-dir "$QL_DATA" data check --snapshot "$SNAP" | tee "$QL_DATA/exports/quality.json"
-          quantlab --data-dir "$QL_DATA" data refresh --snapshot "$SNAP" | tee "$QL_DATA/exports/refresh.json" || test $? -eq 5
+          rc=0; quantlab --data-dir "$QL_DATA" data refresh --snapshot "$SNAP" > "$QL_DATA/exports/refresh.json" || rc=$?
+          cat "$QL_DATA/exports/refresh.json"
+          test "$rc" -eq 0 -o "$rc" -eq 5   # 5 = provider revisions detected (reported, not a failure)
+          python -c "import json,sys; q=json.load(open('$QL_DATA/exports/fx_ingest.json')); sys.exit(q['quality']['status']=='FAILED')"
       - name: Job summary
         if: always()
         run: |
