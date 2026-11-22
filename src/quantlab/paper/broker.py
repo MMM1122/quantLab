@@ -9,8 +9,12 @@ Order lifecycle
                                   \\-> SUBMITTED --advance--> FILLED
                                                   \\-> PARTIALLY_FILLED (volume cap) --advance--> ...
                                                   \\-> CANCELED (user, kill switch, cash at fill)
-Market orders decided during session t fill at the open of t+1 (adverse slippage + commission),
-capped at ``participation_rate`` x session volume (remainder keeps working).
+Orders decided during session t become executable at session t+1.
+* MARKET: fill at the open of t+1 with adverse slippage + commission.
+* LIMIT: see ``limit_fill_price`` (open if better, else the limit if the bar trades through it).
+Fills are capped at ``participation_rate`` x session volume. Time in force: GTC orders keep working
+until filled/canceled; DAY orders are canceled after their single executable session.
+Limit prices more than ``limit_price_band`` (20%) from the last close are rejected (fat-finger).
 
 Money is Decimal: prices 4 dp, cash 2 dp (ROUND_HALF_EVEN), commission rounded up to the cent.
 The cash ledger is the source of truth for cash; ``reconcile`` recomputes cash and positions
@@ -39,6 +43,7 @@ from quantlab.core.labels import REPLAY_LABEL, data_label
 from quantlab.data import calendar
 from quantlab.data.ingestion import require_tradable_snapshot
 from quantlab.domain.models import OPEN_ORDER_STATUSES, OrderSide, OrderStatus, PriceBasis
+from quantlab.portfolio.accounting import assert_cash_non_negative, net_asset_value, weights
 from quantlab.risk import rules
 from quantlab.storage.db import dumps, loads, utcnow
 
@@ -60,6 +65,23 @@ def money(x: Decimal) -> Decimal:
 
 class ReplayFinished(QuantLabError):
     pass
+
+
+def limit_fill_price(side: str, limit: Decimal, open_fill: Decimal, low: Decimal, high: Decimal) -> Decimal | None:
+    """Conservative limit-order fill rule on a daily bar.
+
+    BUY:  if the (slippage-adjusted) open is at or below the limit -> fill at that open price;
+          elif the session LOW trades strictly through the limit -> fill at the limit;
+          else no fill.  SELL is symmetric with HIGH. Touching the limit exactly is not a fill
+          (queue position unknown).
+    """
+    if side == "BUY":
+        if open_fill <= limit:
+            return open_fill
+        return limit if low < limit else None
+    if open_fill >= limit:
+        return open_fill
+    return limit if high > limit else None
 
 
 class _Market:
@@ -165,7 +187,7 @@ class PaperBroker:
         aid = new_id()
         cfg = {k: self.risk_defaults[k] for k in ("max_position_weight", "max_data_staleness_sessions",
                                                   "participation_rate", "commission_bps", "min_commission",
-                                                  "slippage_bps")}
+                                                  "slippage_bps", "limit_price_band")}
         with self.db.transaction() as con:
             con.execute(
                 "INSERT INTO accounts(id, name, mode, base_currency, status, initial_cash, snapshot_id, current_session, "
@@ -192,7 +214,7 @@ class PaperBroker:
         with self.db.connect() as con:
             cash = self._cash(con, acc["id"])
             pos = self._positions(con, acc["id"])
-        holdings = []
+        holdings: list[dict[str, Any]] = []
         mv = ZERO
         for s, q in sorted(pos.items()):
             px = mkt.last_close(s, i)
@@ -202,8 +224,9 @@ class PaperBroker:
             holdings.append({"symbol": s, "quantity": str(q), "last_close": str(px), "market_value": str(money(val)),
                              "price_age_sessions": stale})
         nav = cash + mv
+        w = weights({h["symbol"]: D(h["market_value"]) for h in holdings}, nav)
         for h in holdings:
-            h["weight"] = float(D(h["market_value"]) / nav) if nav > 0 else None
+            h["weight"] = w[h["symbol"]]
         return {
             "id": acc["id"], "name": acc["name"], "mode": acc["mode"], "status": acc["status"],
             "label": REPLAY_LABEL, "data_label": data_label(mkt.is_synthetic), "is_synthetic": mkt.is_synthetic,
@@ -217,11 +240,25 @@ class PaperBroker:
     # ------------------------------------------------------------------ orders
     def submit_order(self, account_id: str, symbol: str, side: str, quantity: Any,
                      client_order_id: str | None = None, order_type: str = "MARKET",
-                     actor: str = "user", mode: str = "PAPER") -> dict[str, Any]:
+                     actor: str = "user", mode: str = "PAPER", limit_price: Any = None,
+                     time_in_force: str = "GTC") -> dict[str, Any]:
         if str(mode).upper() == "LIVE":
             raise LiveTradingDisabledError("live orders do not exist in QuantLab V1")
-        if order_type != "MARKET":
-            raise InputValidationError(f"order_type {order_type!r} not supported in V1 (MARKET only)")
+        order_type = str(order_type).upper()
+        tif = str(time_in_force).upper()
+        if order_type not in ("MARKET", "LIMIT"):
+            raise InputValidationError(f"order_type {order_type!r} not supported (MARKET or LIMIT)")
+        if tif not in ("DAY", "GTC"):
+            raise InputValidationError("time_in_force must be DAY or GTC")
+        lp: Decimal | None = None
+        if order_type == "LIMIT":
+            if limit_price is None:
+                raise InputValidationError("LIMIT orders require limit_price")
+            lp = D(limit_price)
+            if lp <= 0 or lp != lp.quantize(PRICE_Q):
+                raise InputValidationError("limit_price must be > 0 with at most 4 decimals")
+        elif limit_price is not None:
+            raise InputValidationError("limit_price is only valid for LIMIT orders")
         try:
             side_e = OrderSide(str(side).upper())
         except ValueError as exc:
@@ -247,23 +284,24 @@ class PaperBroker:
             cash = self._cash(con, aid)
             pos = self._positions(con, aid)
             open_rows = con.execute(
-                "SELECT symbol, side, quantity, filled_quantity FROM orders WHERE account_id=? AND status IN (?,?)",
-                (aid, *[s.value for s in OPEN_ORDER_STATUSES])).fetchall()
+                "SELECT symbol, side, quantity, filled_quantity, limit_price FROM orders WHERE account_id=? "
+                "AND status IN (?,?)", (aid, *[s.value for s in OPEN_ORDER_STATUSES])).fetchall()
             pend_sell = sum((D(r[2]) - D(r[3]) for r in open_rows if r[0] == sym and r[1] == "SELL"), ZERO)
             pend_buy_qty = sum((D(r[2]) - D(r[3]) for r in open_rows if r[0] == sym and r[1] == "BUY"), ZERO)
             pend_buy_cost = ZERO
             for r in open_rows:
                 if r[1] == "BUY":
-                    p = mkt.last_close(r[0], i) or ZERO
                     rem = D(r[2]) - D(r[3])
-                    n = rem * self._fill_price(cfg, p, "BUY")
+                    n = rem * (D(r[4]) if r[4] is not None else self._fill_price(cfg, mkt.last_close(r[0], i) or ZERO,
+                                                                                 "BUY"))
                     pend_buy_cost += n + self._commission(cfg, n)
             nav = cash + sum(((q * (mkt.last_close(s, i) or ZERO)) for s, q in pos.items()), ZERO)
             px = mkt.last_close(sym, i) if sym in mkt.symbols else None
             dup = con.execute(
                 "SELECT id FROM orders WHERE account_id=? AND symbol=? AND side=? AND quantity=? AND decision_session=? "
-                "AND status IN (?,?)", (aid, sym, side_e.value, str(qty), acc["current_session"],
-                                        *[s.value for s in OPEN_ORDER_STATUSES])).fetchone()
+                "AND order_type=? AND COALESCE(limit_price,'')=? AND status IN (?,?)",
+                (aid, sym, side_e.value, str(qty), acc["current_session"], order_type, str(lp) if lp else "",
+                 *[s.value for s in OPEN_ORDER_STATUSES])).fetchone()
 
             decision = rules.first_failure(
                 rules.kill_switch(bool(acc["kill_switch"])),
@@ -276,8 +314,14 @@ class PaperBroker:
                                    "only if intentional)"),
                 rules.long_only(side_e, qty, pos.get(sym, ZERO), pend_sell),
             )
-            if decision.approved and side_e == OrderSide.BUY:
-                est_px = self._fill_price(cfg, px, "BUY")
+            if decision.approved and px is None:  # defensive: fresh_data should already have caught this
+                decision = rules.RiskDecision(False, "NO_MARKET_DATA", f"no price for {sym} at the replay session")
+            band = D(cfg.get("limit_price_band", 0.20))
+            if decision.approved and lp is not None and px is not None and abs(lp / px - 1) > band:
+                decision = rules.RiskDecision(False, "LIMIT_PRICE_OUT_OF_BAND",
+                                              f"limit {lp} is more than {band:.0%} away from last close {px}")
+            if decision.approved and side_e == OrderSide.BUY and px is not None:
+                est_px = lp if lp is not None else self._fill_price(cfg, px, "BUY")
                 est = qty * est_px
                 decision = rules.first_failure(
                     rules.sufficient_cash(side_e, money(est + self._commission(cfg, est)), cash, money(pend_buy_cost)),
@@ -289,16 +333,19 @@ class PaperBroker:
             status = OrderStatus.SUBMITTED if decision.approved else OrderStatus.REJECTED
             con.execute(
                 "INSERT INTO orders(id, account_id, symbol, client_order_id, side, quantity, filled_quantity, order_type, "
-                "status, reason, decision_session, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (oid, aid, sym, coid, side_e.value, str(qty), "0", "MARKET", status.value,
+                "limit_price, time_in_force, status, reason, decision_session, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (oid, aid, sym, coid, side_e.value, str(qty), "0", order_type, str(lp) if lp is not None else None, tif,
+                 status.value,
                  None if decision.approved else f"{decision.rule}: {decision.reason}", acc["current_session"], now, now),
             )
             if not decision.approved:
-                self._risk_event(con, aid, decision.rule, "ORDER_REJECTED",
+                self._risk_event(con, aid, decision.rule or "UNSPECIFIED", "ORDER_REJECTED",
                                  {"order_id": oid, "symbol": sym, "side": side_e.value, "quantity": str(qty),
                                   "reason": decision.reason})
             self.db.audit(actor, "paper.order." + status.value.lower(), "order", oid,
-                          {"symbol": sym, "side": side_e.value, "quantity": str(qty), "client_order_id": coid}, con=con)
+                          {"symbol": sym, "side": side_e.value, "quantity": str(qty), "client_order_id": coid,
+                           "order_type": order_type, "limit_price": str(lp) if lp else None, "tif": tif}, con=con)
             return self._order(con, oid)
 
     def cancel_order(self, account_id: str, order_id: str, reason: str = "USER_CANCELED") -> dict[str, Any]:
@@ -378,8 +425,7 @@ class PaperBroker:
         status = OrderStatus.FILLED if filled == D(o["quantity"]) else OrderStatus.PARTIALLY_FILLED
         con.execute("UPDATE orders SET filled_quantity=?, status=?, updated_at=? WHERE id=?",
                     (str(filled), status.value, now, order_id))
-        if self._cash(con, aid) < 0:
-            raise AccountingInvariantError("fill would make cash negative")  # rolls back the transaction
+        assert_cash_non_negative(self._cash(con, aid), "after fill", tolerance=0)  # raising rolls back
         return True
 
     # ------------------------------------------------------------------ replay clock
@@ -440,12 +486,20 @@ class PaperBroker:
                 o = self._order(con, oid)
                 b = mkt.bar(o["symbol"], j)
                 if b is None:
-                    summary["notes"].append(f"{o['symbol']}: no bar on {d}; order {oid[:8]} keeps working")
+                    summary["notes"].append(f"{o['symbol']}: no bar on {d}; order {oid[:8]} not executable")
+                    self._expire_day_order(con, o, d, summary)
                     continue
                 rem = D(o["quantity"]) - D(o["filled_quantity"])
                 cap = (D(b.volume) * D(cfg["participation_rate"])).to_integral_value(rounding=ROUND_FLOOR)
                 q = min(rem, cap)
                 px = self._fill_price(cfg, D(b.open).quantize(PRICE_Q), o["side"])
+                if o["order_type"] == "LIMIT":
+                    lim_px = limit_fill_price(o["side"], D(o["limit_price"]), px, D(b.low), D(b.high))
+                    if lim_px is None:
+                        summary["notes"].append(f"{o['symbol']}: limit {o['limit_price']} not reached on {d}")
+                        self._expire_day_order(con, o, d, summary)
+                        continue
+                    px = lim_px
                 if o["side"] == "SELL":
                     held = self._positions(con, aid).get(o["symbol"], ZERO)
                     q = min(q, held)
@@ -458,6 +512,7 @@ class PaperBroker:
                     reason = "INSUFFICIENT_CASH_AT_FILL" if o["side"] == "BUY" else "NO_POSITION_AT_FILL"
                     if cap <= 0:
                         summary["notes"].append(f"{o['symbol']}: zero volume capacity on {d}")
+                        self._expire_day_order(con, o, d, summary)
                         continue
                     con.execute("UPDATE orders SET status=?, reason=?, updated_at=? WHERE id=?",
                                 (OrderStatus.CANCELED.value, reason, utcnow(), oid))
@@ -474,6 +529,8 @@ class PaperBroker:
                 if cash_limited and D(o2["remaining_quantity"]) > 0:
                     con.execute("UPDATE orders SET status=?, reason=?, updated_at=? WHERE id=?",
                                 (OrderStatus.CANCELED.value, "REMAINDER_CANCELED_INSUFFICIENT_CASH", utcnow(), oid))
+                else:
+                    self._expire_day_order(con, o2, d, summary)
 
             # 3) advance the clock and value the portfolio at the close
             con.execute("UPDATE accounts SET current_session=? WHERE id=?", (d, aid))
@@ -484,16 +541,21 @@ class PaperBroker:
                           "fills": len(summary["fills"])}, con=con)
             return summary
 
+    def _expire_day_order(self, con, o: dict[str, Any], session: str, summary: dict[str, Any]) -> None:
+        """DAY orders live for exactly one trading session after the decision session."""
+        cur = self._order(con, o["id"])
+        if cur["time_in_force"] == "DAY" and cur["status"] in [s.value for s in OPEN_ORDER_STATUSES]:
+            con.execute("UPDATE orders SET status=?, reason=?, updated_at=? WHERE id=?",
+                        (OrderStatus.CANCELED.value, f"DAY_ORDER_EXPIRED {session}", utcnow(), o["id"]))
+            summary["notes"].append(f"DAY order {o['id'][:8]} expired with {cur['remaining_quantity']} unfilled")
+
     def _snapshot_portfolio(self, con, aid: str, mkt: _Market, i: int) -> None:
         cash = self._cash(con, aid)
         pos = self._positions(con, aid)
-        holdings = {}
-        mv = ZERO
-        for s, q in pos.items():
-            px = mkt.last_close(s, i) or ZERO
-            mv += q * px
-            holdings[s] = {"quantity": str(q), "close": str(px)}
-        nav = cash + mv
+        prices = {s: mkt.last_close(s, i) or ZERO for s in pos}
+        holdings = {s: {"quantity": str(q), "close": str(prices[s])} for s, q in pos.items()}
+        nav = net_asset_value(cash, pos, prices)
+        mv = nav - cash
         con.execute("INSERT OR REPLACE INTO portfolio_snapshots(id, account_id, session_date, nav, cash_value, "
                     "gross_exposure, holdings) VALUES (?,?,?,?,?,?,?)",
                     (deterministic_id("ps", aid, mkt.sessions[i]), aid, mkt.sessions[i].strftime("%Y-%m-%d"),
@@ -532,6 +594,20 @@ class PaperBroker:
         for c in ("nav", "cash_value", "gross_exposure"):
             df[c] = df[c].astype(float)
         return df
+
+    def nav_history_cad(self, account_id: str) -> tuple[pd.DataFrame, dict[str, Any]]:
+        """NAV history converted to CAD (unhedged view) with FX of the same realness as the replay data."""
+        from quantlab.data.fx import fx_series, latest_fx_snapshot, to_cad
+
+        acc = self._account_row(account_id)
+        mkt = self._market(acc["snapshot_id"])
+        hist = self.nav_history(account_id)
+        fx_snap = latest_fx_snapshot(self.ctx, synthetic=mkt.is_synthetic, start=hist["session_date"].iloc[0],
+                                     end=hist["session_date"].iloc[-1])
+        nav = hist.set_index(pd.to_datetime(hist["session_date"]))["nav"]
+        cad, info = to_cad(nav, fx_series(self.ctx, fx_snap.id))
+        out = hist.assign(nav_cad=cad.to_numpy())
+        return out, {"fx_snapshot_id": fx_snap.id, "pair": "USDCAD (CAD per USD)", **info}
 
     def risk_events(self, account_id: str | None = None) -> list[dict[str, Any]]:
         if account_id:

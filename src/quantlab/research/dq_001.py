@@ -281,15 +281,15 @@ def _execute(ctx, cfg: DQ001Config, snap, eid: str, design: dict, progress) -> d
     ref = "strict_skip" if "strict_skip" in cfg.policies else cfg.policies[0]
     for (sid, scn), g in df.groupby(["strategy", "scenario"], sort=False):
         base = g[g.policy == ref].set_index("seed")
-        for pol in cfg.policies:
-            if pol == ref:
+        for pol_name in cfg.policies:
+            if pol_name == ref:
                 continue
-            other = g[g.policy == pol].set_index("seed")
+            other = g[g.policy == pol_name].set_index("seed")
             common = base.index.intersection(other.index)
             for mname in ("delta_total_return", "delta_sharpe", "missed_signals"):
                 diff = (other.loc[common, mname] - base.loc[common, mname]).to_numpy(dtype=float)
                 ci = mean_ci(diff)
-                comp_rows.append({"strategy": sid, "scenario": scn, "metric": mname, "policy": pol,
+                comp_rows.append({"strategy": sid, "scenario": scn, "metric": mname, "policy": pol_name,
                                   "minus": ref, "n_pairs": ci["n"], "mean_diff": ci["mean"],
                                   "ci_low": ci["ci_low"], "ci_high": ci["ci_high"]})
     findings = _findings(agg_rows, comp_rows)

@@ -18,7 +18,8 @@ from typing import Any
 from quantlab.core.errors import InputValidationError, NotFoundError
 from quantlab.core.ids import validate_uuid
 
-TOOL_NAMES = ("get_backtest_facts", "compare_backtests", "get_experiment_facts", "list_recent_backtests")
+TOOL_NAMES = ("get_backtest_facts", "compare_backtests", "compare_statistics", "get_experiment_facts",
+              "list_recent_backtests")
 NET_KEYS = ["total_return", "cagr", "annual_volatility", "sharpe", "sharpe_ci95_low", "sharpe_ci95_high", "sortino",
             "max_drawdown", "max_drawdown_duration_sessions", "turnover_annual", "time_in_market", "n_fills",
             "total_commission", "total_slippage_cost", "total_dividends", "final_nav", "initial_nav", "n_sessions",
@@ -87,6 +88,21 @@ class ReadOnlyResearchTools:
             raise InputValidationError("compare needs at least two run ids")
         return [self.get_backtest_facts(r) for r in run_ids]
 
+    def compare_statistics(self, run_ids: list[str], n_trials: int | None = None) -> dict[str, Any]:
+        """Read stored equity curves and run the statistical tests (read-only)."""
+        import pandas as pd
+
+        from quantlab.research.stat_tests import compare_strategies
+
+        navs = {}
+        for rid in run_ids:
+            r = self._one("SELECT id, strategy_name, artifact_uri FROM backtest_runs WHERE id=?", (validate_uuid(rid),))
+            if r is None:
+                raise NotFoundError(f"backtest {rid} not found")
+            eq = pd.read_parquet(Path(r["artifact_uri"]) / "equity.parquet").set_index("session")["nav"]
+            navs[f"{r['id'][:8]} {r['strategy_name']}"] = eq
+        return compare_strategies(navs, n_trials=n_trials, seed=0, n_boot=1000)
+
     def get_experiment_facts(self, experiment_id: str) -> dict[str, Any]:
         eid = validate_uuid(experiment_id, "experiment_id")
         r = self._one("SELECT id, code, status, results FROM experiments WHERE id=?", (eid,))
@@ -95,6 +111,8 @@ class ReadOnlyResearchTools:
         if r["status"] != "COMPLETED":
             raise InputValidationError(f"experiment {eid} is {r['status']}")
         res = json.loads(r["results"])
+        if r["code"] == "WALK-FORWARD":
+            return self._walkforward_facts(eid, res)
         facts: dict[str, Any] = {}
         for a in res["aggregate"]:
             key = f"{a['strategy']}|{a['scenario']}|{a['policy']}"
@@ -113,4 +131,26 @@ class ReadOnlyResearchTools:
             "label": res["label"], "seeds": res["design"]["config"]["seeds"], "symbol": res["design"]["config"]["symbol"],
             "aggregate": res["aggregate"], "findings": res["findings"], "facts": facts,
             "research_only_policies": res.get("research_only_policies", {}),
+        }
+
+    @staticmethod
+    def _walkforward_facts(eid: str, res: dict[str, Any]) -> dict[str, Any]:
+        facts: dict[str, Any] = {}
+        for k in NET_KEYS:
+            if res["oos_metrics"].get(k) is not None:
+                facts[f"oos.{k}"] = res["oos_metrics"][k]
+            if (res.get("benchmark_metrics") or {}).get(k) is not None:
+                facts[f"benchmark.{k}"] = res["benchmark_metrics"][k]
+        for f in res["folds"]:
+            for k in ("train_objective", "test_objective", "test_total_return", "oos_percentile_rank"):
+                if f.get(k) is not None:
+                    facts[f"fold{f['fold']}.{k}"] = f[k]
+        if res.get("mean_oos_percentile_rank") is not None:
+            facts["mean_oos_percentile_rank"] = res["mean_oos_percentile_rank"]
+        return {
+            "kind": "walkforward", "experiment_id": eid, "code": res["code"], "source": f"experiments/{eid}.results",
+            "strategy": res["strategy"], "symbols": res["symbols"], "objective": res["objective"],
+            "window": res["evaluation_window"], "n_folds": len(res["folds"]), "n_configs": res["n_configs"],
+            "chosen_params": [f["chosen_params"] for f in res["folds"]], "is_synthetic": res["is_synthetic"],
+            "data_label": res["data_label"], "label": res["label"], "findings": res["findings"], "facts": facts,
         }

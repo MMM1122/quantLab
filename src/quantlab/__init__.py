@@ -4,4 +4,4 @@ Research and simulation only. QuantLab V1 contains no live broker integration an
 never places real orders. Backtest and paper results are simulations, not real performance.
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"

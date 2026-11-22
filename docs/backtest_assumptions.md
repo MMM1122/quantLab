@@ -44,6 +44,16 @@ into past signals. Back-adjusted `adj_close` (which uses future events) is never
 * A higher backtest Sharpe does not prove an exploitable edge; overlapping CIs mean no
   statistically reliable ranking.
 
+## Comparing strategies statistically
+* `quantlab backtest compare --stats` / `GET /backtests/compare` / Backtest Lab → Compare.
+* Jobson–Korkie z-test with Memmel's correction on paired daily returns (assumes iid normal).
+* Paired circular block bootstrap (block 21, seeded) of the Sharpe difference → 95% CI and p-value.
+* Probabilistic Sharpe ratio (skew/kurtosis aware) and **deflated Sharpe** for the best of N trials.
+  N defaults to the number of runs compared — pass `--trials` with the number of configurations you
+  really tried (including discarded ones), otherwise the correction is too lenient.
+* Volatility target: weight × min(1, target_vol / trailing 63-session realised vol), rounded down to
+  0.1 steps; never above the base weight, so never levered.
+
 ## Reproducibility
 Each run persists: strategy id/version/params, snapshot id + SHA-256, full config + config hash,
 git commit (with `-dirty` suffix if uncommitted changes), seed, warnings, timing. Re-running the

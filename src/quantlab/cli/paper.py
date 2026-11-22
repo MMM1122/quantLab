@@ -37,7 +37,8 @@ def cmd_status(args) -> int:
 
 def cmd_order(args) -> int:
     b = _broker(args)
-    o = b.submit_order(args.account, args.symbol, args.side, args.quantity, args.client_order_id, actor="cli")
+    o = b.submit_order(args.account, args.symbol, args.side, args.quantity, args.client_order_id,
+                       order_type=args.type, actor="cli", limit_price=args.limit_price, time_in_force=args.tif)
     _print(o)
     return 0 if o["status"] != "REJECTED" else 3
 
@@ -70,6 +71,31 @@ def cmd_reconcile(args) -> int:
     return 0 if r["ok"] else 4
 
 
+def cmd_autopilot(args) -> int:
+    import json as _json
+
+    from quantlab.paper.autopilot import StrategyAutopilot
+
+    ap = StrategyAutopilot(_ctx(args))
+    if args.action == "attach":
+        params = _json.loads(args.params) if args.params else {}
+        _print(ap.attach(args.account, args.strategy, args.symbols, params))
+    elif args.action == "run":
+        out = ap.run(args.account, args.sessions)
+        _show({k: v for k, v in out.items()})
+    elif args.action == "compare":
+        from quantlab.paper.compare import paper_vs_backtest
+
+        r = paper_vs_backtest(ap.ctx, args.account)
+        r.pop("_series")
+        _print(r)
+    elif args.action in ("enable", "disable"):
+        _print(ap.set_enabled(args.account, args.action == "enable"))
+    else:
+        _print(ap.get(args.account))
+    return 0
+
+
 def register(sub) -> None:
     p = sub.add_parser("paper", help="paper trading on historical replay").add_subparsers(dest="cmd", required=True)
     c = p.add_parser("create")
@@ -88,6 +114,9 @@ def register(sub) -> None:
     o.add_argument("--side", choices=["BUY", "SELL", "buy", "sell"], required=True)
     o.add_argument("--quantity", required=True)
     o.add_argument("--client-order-id", default=None)
+    o.add_argument("--type", choices=["MARKET", "LIMIT"], default="MARKET")
+    o.add_argument("--limit-price", default=None)
+    o.add_argument("--tif", choices=["DAY", "GTC"], default="GTC", help="time in force")
     o.set_defaults(func=cmd_order)
     x = p.add_parser("cancel")
     x.add_argument("--account", required=True)
@@ -105,6 +134,14 @@ def register(sub) -> None:
     k.add_argument("state", choices=["on", "off"])
     k.add_argument("--reason", default="")
     k.set_defaults(func=cmd_kill)
+    au = p.add_parser("autopilot", help="run a deterministic strategy on the paper account (replay only)")
+    au.add_argument("action", choices=["attach", "run", "compare", "status", "enable", "disable"])
+    au.add_argument("--account", required=True)
+    au.add_argument("--strategy", default="sma-crossover")
+    au.add_argument("--symbols", nargs="+", default=["SPY"])
+    au.add_argument("--params", default=None, help="JSON strategy parameters")
+    au.add_argument("--sessions", type=int, default=20)
+    au.set_defaults(func=cmd_autopilot)
     r = p.add_parser("reconcile")
     r.add_argument("--account", required=True)
     r.set_defaults(func=cmd_reconcile)

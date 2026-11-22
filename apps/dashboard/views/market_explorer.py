@@ -5,8 +5,10 @@ import streamlit as st
 
 from quantlab.core.errors import QuantLabError
 from quantlab.core.labels import data_label
+from quantlab.data.fx import ingest_fx, is_fx_snapshot
 from quantlab.data.ingestion import ingest
-from quantlab.data.providers import YF_TERMS_WARNING, get_provider
+from quantlab.data.providers import YF_TERMS_WARNING, YFinanceProvider, get_provider
+from quantlab.data.refresh import lineage, refresh_snapshot
 from quantlab.reports import charts
 from quantlab.storage import duckdb_store
 from quantlab.ui.common import df_download, get_ctx, safety_banner, snapshot_selector, synthetic_banner
@@ -36,14 +38,47 @@ with st.expander("Ingest data", expanded=not ctx.snapshots.list()):
         except QuantLabError as exc:
             st.error(f"Ingest failed — no snapshot created and no trading action taken: {exc}")
 
-snap = snapshot_selector(ctx, "mx_snap", include_derived=True)
+with st.expander("Ingest USDCAD FX (for CAD reporting)"):
+    with st.form("fx_ingest"):
+        c1, c2, c3 = st.columns(3)
+        fx_src = c1.radio("Source", ["yfinance", "synthetic"], horizontal=True)
+        fx_start = c2.date_input("FX start", date(2015, 1, 1), min_value=date(1995, 1, 1))
+        fx_end = c3.date_input("FX end", date.today() if fx_src == "yfinance" else date(2025, 12, 31))
+        fx_go = st.form_submit_button("Ingest FX")
+    if fx_go:
+        try:
+            fsnap, frep, _ = ingest_fx(ctx, str(fx_start), str(fx_end), synthetic=fx_src == "synthetic")
+            st.success(f"FX snapshot {fsnap.id[:8]} ({fsnap.start}→{fsnap.end}) quality {frep.status}")
+        except QuantLabError as exc:
+            st.error(f"FX ingest failed: {exc}")
+
+snap = snapshot_selector(ctx, "mx_snap", include_derived=True, include_fx=True)
 if snap is None:
     st.stop()
+if not snap.is_synthetic and snap.parent_id is None and not is_fx_snapshot(snap):
+    if st.button("Refresh from provider (new snapshot + revision check)"):
+        try:
+            with st.spinner("Re-downloading full history…"):
+                rr = refresh_snapshot(ctx, snap.id, YFinanceProvider())
+            t = rr.diff["totals"]
+            msg = (f"{rr.diff['status']}: new snapshot {rr.new_snapshot_id[:8]} · appended {t['appended']} · "
+                   f"raw revisions {t['raw_revised']} · removed {t['removed']} · adj-only {t['adj_only_revised']}")
+            (st.warning if rr.diff["status"] == "REVISIONS_DETECTED" else st.success)(msg)
+        except QuantLabError as exc:
+            st.error(f"Refresh failed — existing snapshot untouched: {exc}")
 synthetic_banner(snap.is_synthetic)
 st.caption(f"{data_label(snap.is_synthetic)} · provider `{snap.provider}` · price basis `{snap.price_basis}` · "
            f"hash `{snap.dataset_hash[:16]}…` · retrieved {snap.retrieved_at[:19]}")
 
-tab_q, tab_p, tab_a, tab_s = st.tabs(["Data quality", "Prices", "Corporate actions", "Summary"])
+tab_q, tab_p, tab_a, tab_s, tab_l = st.tabs(["Data quality", "Prices", "Corporate actions", "Summary", "Lineage"])
+with tab_l:
+    rows = lineage(ctx, snap.id)
+    if not rows:
+        st.write("No refresh history for this snapshot.")
+    for r in rows:
+        st.markdown(f"**{r['diff']['status']}** · {r['base_snapshot_id'][:8]} → {r['new_snapshot_id'][:8]} · "
+                    f"{r['created_at'][:19]}")
+        st.json(r["diff"]["totals"])
 with tab_q:
     status = ctx.snapshots.quality_status(snap.id)
     issues = ctx.snapshots.quality_issues(snap.id)

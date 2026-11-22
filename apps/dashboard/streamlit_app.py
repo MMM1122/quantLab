@@ -3,9 +3,19 @@
 Run:  streamlit run apps/dashboard/streamlit_app.py
 """
 
+import sys
 from pathlib import Path
 
 import streamlit as st
+
+# Hosted platforms (e.g. Streamlit Community Cloud) may install only requirements.txt without the
+# package itself; make the repo's src/ importable in that case.
+_SRC = Path(__file__).resolve().parents[2] / "src"
+if str(_SRC) not in sys.path:
+    try:
+        import quantlab  # noqa: F401
+    except ModuleNotFoundError:
+        sys.path.insert(0, str(_SRC))
 
 st.set_page_config(page_title="QuantLab", page_icon="📈", layout="wide")
 

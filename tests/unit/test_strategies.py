@@ -14,6 +14,7 @@ FAST_PARAMS = {
     "sma-crossover": {"fast": 10, "slow": 40},
     "rsi-mean-reversion": {"window": 14, "entry": 35, "exit": 55, "max_hold": 10},
     "momentum": {"lookback": 60, "skip": 5, "top_k": 2},
+    "vol-target": {"base": "sma-crossover", "base_params": {"fast": 10, "slow": 40}, "window": 20},
 }
 
 
@@ -109,3 +110,22 @@ def test_registry_aliases_and_validation():
         create_strategy("sma-crossover", {"fast": 200, "slow": 50})
     with pytest.raises(InputValidationError):
         create_strategy("sma-crossover", {"bogus": 1})
+
+
+def test_vol_target_scales_down_never_levers_and_reduces_volatility(synth_bars):
+    from quantlab.backtest.engine import BacktestConfig, run_backtest
+
+    panel = build_panel(synth_bars, "unadjusted", symbols=["QQQ"])
+    vt = create_strategy("vol-target", {"target_vol": 0.08, "window": 63, "step": 0.1})
+    w = vt.target_weights(panel.signal_price)["QQQ"].dropna()
+    assert (w <= 1.0).all() and (w >= 0).all()
+    assert np.allclose(w * 10, np.round(w * 10))  # quantised to 0.1 steps
+    assert w.mean() < 1.0  # QQQ fixture vol (~22%) > 8% target -> scaled down
+    cfg = BacktestConfig(commission_bps=0, slippage_bps=0, start="2019-01-02")
+    raw = run_backtest(panel, create_strategy("buy-hold"), cfg).equity.nav.pct_change().std()
+    tgt = run_backtest(panel, vt, cfg).equity.nav.pct_change().std()
+    assert tgt < raw * 0.75
+    with pytest.raises(InputValidationError):
+        create_strategy("vol-target", {"base": "vol-target"})
+    with pytest.raises(InputValidationError):
+        create_strategy("vol-target", {"target_vol": 2.0})

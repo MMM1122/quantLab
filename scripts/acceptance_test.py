@@ -211,7 +211,10 @@ def main() -> int:
                                     env=env, cwd=REPO, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
                 _wait(f"http://127.0.0.1:{port}/health")
-                r = httpx.get(f"http://127.0.0.1:{port}/paper/account", params={"account_id": state["account_id"]})
+                hdr = {"Authorization": f"Bearer {os.environ['QUANTLAB_API_TOKEN']}"} if os.environ.get(
+                    "QUANTLAB_API_TOKEN") else {}
+                r = httpx.get(f"http://127.0.0.1:{port}/paper/account", params={"account_id": state["account_id"]},
+                              headers=hdr)
                 api_states.append(r.json()["data"])
             finally:
                 proc.terminate()

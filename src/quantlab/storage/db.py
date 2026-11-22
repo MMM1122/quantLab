@@ -18,7 +18,7 @@ from typing import Any
 
 from quantlab.core.ids import new_id
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS assets (
@@ -45,6 +45,13 @@ CREATE TABLE IF NOT EXISTS data_snapshots (
   parent_id TEXT REFERENCES data_snapshots(id),
   manifest TEXT NOT NULL DEFAULT '{}',
   quality_status TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS snapshot_lineage (
+  id TEXT PRIMARY KEY,
+  base_snapshot_id TEXT NOT NULL REFERENCES data_snapshots(id),
+  new_snapshot_id TEXT NOT NULL REFERENCES data_snapshots(id),
+  diff TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS quality_issues (
@@ -143,13 +150,16 @@ CREATE TABLE IF NOT EXISTS orders (
   side TEXT NOT NULL CHECK (side IN ('BUY','SELL')),
   quantity TEXT NOT NULL,
   filled_quantity TEXT NOT NULL DEFAULT '0',
-  order_type TEXT NOT NULL CHECK (order_type IN ('MARKET')),
+  order_type TEXT NOT NULL CHECK (order_type IN ('MARKET','LIMIT')),
+  limit_price TEXT,
+  time_in_force TEXT NOT NULL DEFAULT 'GTC' CHECK (time_in_force IN ('DAY','GTC')),
   status TEXT NOT NULL CHECK (status IN ('CREATED','REJECTED','SUBMITTED','PARTIALLY_FILLED','FILLED','CANCELED')),
   reason TEXT,
   decision_session TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  UNIQUE(account_id, client_order_id)
+  UNIQUE(account_id, client_order_id),
+  CHECK ((order_type = 'LIMIT') = (limit_price IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS idx_orders_account ON orders(account_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS executions (
@@ -193,6 +203,16 @@ CREATE TABLE IF NOT EXISTS portfolio_snapshots (
   holdings TEXT NOT NULL,
   UNIQUE(account_id, session_date)
 );
+CREATE TABLE IF NOT EXISTS autopilots (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id),
+  strategy TEXT NOT NULL,
+  params TEXT NOT NULL DEFAULT '{}',
+  symbols TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  state TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS risk_events (
   id TEXT PRIMARY KEY,
   account_id TEXT,
@@ -213,6 +233,12 @@ CREATE TABLE IF NOT EXISTS audit_events (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_events(entity_type, entity_id, created_at);
 """
+
+
+def new_orders_ddl() -> str:
+    start = SCHEMA.index("CREATE TABLE IF NOT EXISTS orders (")
+    end = SCHEMA.index(");", start) + 2
+    return SCHEMA[start:end]
 
 
 def utcnow() -> str:
@@ -236,8 +262,40 @@ class Database:
         self._local = threading.local()
         self._write_lock = threading.RLock()
         with self.connect() as con:
+            version = con.execute("PRAGMA user_version").fetchone()[0]
+            has_tables = con.execute("SELECT 1 FROM sqlite_master WHERE name='orders'").fetchone() is not None
+            if has_tables and version < SCHEMA_VERSION:
+                self._migrate(con, version)
             con.executescript(SCHEMA)
             con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+    @staticmethod
+    def _migrate(con: sqlite3.Connection, version: int) -> None:
+        """Forward-only schema migrations (SQLite cannot ALTER a CHECK constraint, so rebuild)."""
+        if version < 2:
+            # v2: LIMIT orders + time_in_force on `orders`
+            con.execute("PRAGMA foreign_keys = OFF")
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                # SQLite's recommended 12-step procedure: new table, copy, drop old, rename new.
+                con.execute(new_orders_ddl().replace("CREATE TABLE IF NOT EXISTS orders (", "CREATE TABLE orders_v2 ("))
+                con.execute(
+                    "INSERT INTO orders_v2(id, account_id, symbol, client_order_id, side, quantity, filled_quantity, "
+                    "order_type, limit_price, time_in_force, status, reason, decision_session, created_at, updated_at) "
+                    "SELECT id, account_id, symbol, client_order_id, side, quantity, filled_quantity, order_type, NULL, "
+                    "'GTC', status, reason, decision_session, created_at, updated_at FROM orders"
+                )
+                con.execute("DROP TABLE orders")
+                con.execute("ALTER TABLE orders_v2 RENAME TO orders")
+                bad = con.execute("PRAGMA foreign_key_check").fetchall()
+                if bad:
+                    raise sqlite3.IntegrityError(f"foreign key violations after migration: {bad[:5]}")
+                con.execute("COMMIT")
+            except BaseException:
+                con.execute("ROLLBACK")
+                raise
+            finally:
+                con.execute("PRAGMA foreign_keys = ON")
 
     def _conn(self) -> sqlite3.Connection:
         con = getattr(self._local, "con", None)

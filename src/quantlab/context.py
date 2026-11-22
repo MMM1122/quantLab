@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass
 from functools import lru_cache
@@ -27,16 +28,18 @@ def build_context(data_dir: str | Path | None = None) -> AppContext:
 
 @lru_cache(maxsize=1)
 def git_commit() -> str | None:
+    """Code version for provenance: git HEAD (+ -dirty), or QUANTLAB_GIT_COMMIT baked into images."""
+    baked = os.environ.get("QUANTLAB_GIT_COMMIT", "").strip()
     try:
         out = subprocess.run(
             ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5
         )
         if out.returncode != 0:
-            return None
+            return baked or None
         dirty = subprocess.run(
             ["git", "-C", str(REPO_ROOT), "status", "--porcelain", "--untracked-files=no"],
             capture_output=True, text=True, timeout=5,
         )
         return out.stdout.strip() + ("-dirty" if dirty.stdout.strip() else "")
     except (OSError, subprocess.SubprocessError):
-        return None
+        return baked or None

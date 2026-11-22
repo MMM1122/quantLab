@@ -86,6 +86,40 @@ def cmd_data_check(args) -> int:
     return 1 if rep.blocking else 0
 
 
+def cmd_data_refresh(args) -> int:
+    from quantlab.data.providers import YFinanceProvider
+    from quantlab.data.refresh import refresh_snapshot
+
+    ctx = _ctx(args)
+    res = refresh_snapshot(ctx, args.snapshot, YFinanceProvider(), args.end)
+    _print({"base_snapshot_id": res.base_snapshot_id, "new_snapshot_id": res.new_snapshot_id,
+            "created": res.ingest.created, "quality": res.ingest.quality.status, "status": res.diff["status"],
+            "totals": res.diff["totals"], "range": [res.ingest.snapshot.start, res.ingest.snapshot.end]})
+    return 5 if res.diff["status"] == "REVISIONS_DETECTED" else 0
+
+
+def cmd_data_ingest_fx(args) -> int:
+    from quantlab.data.fx import ingest_fx
+
+    ctx = _ctx(args)
+    snap, rep, created = ingest_fx(ctx, args.start, args.end, synthetic=args.fixture == "synthetic", seed=args.seed)
+    _banner(snap.is_synthetic)
+    _print({"snapshot_id": snap.id, "created": created, "pair": "USDCAD (CAD per USD)", "provider": snap.provider,
+            "data_label": data_label(snap.is_synthetic), "range": [snap.start, snap.end], "rows": snap.n_rows,
+            "quality": {"status": rep.status, "counts": rep.counts}})
+    return 0
+
+
+def cmd_backtest_show(args) -> int:
+    from quantlab.backtest.service import metrics_in_currency
+
+    ctx = _ctx(args)
+    out = metrics_in_currency(ctx, args.run, args.currency)
+    out.pop("_curves", None)
+    _print(out)
+    return 0
+
+
 def cmd_data_list(args) -> int:
     ctx = _ctx(args)
     _print([{"id": s.id, "provider": s.provider, "synthetic": s.is_synthetic, "symbols": s.symbols,
@@ -162,7 +196,12 @@ def cmd_backtest_compare(args) -> int:
                                                "max_drawdown", "turnover_annual", "n_fills")}})
     if len({r["synthetic"] for r in rows}) > 1:
         print("WARNING: comparing runs on synthetic and real data", file=sys.stderr)
-    _print(rows)
+    if args.stats:
+        from quantlab.backtest.service import compare_runs
+
+        _print({"runs": rows, "statistics": compare_runs(ctx, args.runs, args.trials, args.seed)})
+    else:
+        _print(rows)
     return 0
 
 
@@ -194,6 +233,16 @@ def build_parser() -> argparse.ArgumentParser:
     dc.add_argument("--snapshot", required=True)
     dc.set_defaults(func=cmd_data_check)
     data.add_parser("list", help="list snapshots").set_defaults(func=cmd_data_list)
+    dfx = data.add_parser("ingest-fx", help="ingest daily USDCAD (CAD per USD) for CAD reporting")
+    dfx.add_argument("--start", required=True)
+    dfx.add_argument("--end", default=None)
+    dfx.add_argument("--fixture", choices=["synthetic"], default=None)
+    dfx.add_argument("--seed", type=int, default=7)
+    dfx.set_defaults(func=cmd_data_ingest_fx)
+    dr = data.add_parser("refresh", help="re-download a real snapshot into a new one and report provider revisions")
+    dr.add_argument("--snapshot", default="latest", help="snapshot id or 'latest' (most recent real snapshot)")
+    dr.add_argument("--end", default=None, help="default: last completed XNYS session")
+    dr.set_defaults(func=cmd_data_refresh)
 
     bt = sub.add_parser("backtest", help="backtests").add_subparsers(dest="cmd", required=True)
     br = bt.add_parser("run")
@@ -215,8 +264,16 @@ def build_parser() -> argparse.ArgumentParser:
     br.add_argument("--param", action="append", help="strategy parameter key=value (repeatable)")
     br.set_defaults(func=cmd_backtest_run)
     bt.add_parser("list").set_defaults(func=cmd_backtest_list)
+    bs = bt.add_parser("show", help="metrics of a stored run in USD or CAD")
+    bs.add_argument("--run", required=True)
+    bs.add_argument("--currency", choices=["USD", "CAD"], default="USD")
+    bs.set_defaults(func=cmd_backtest_show)
     bc = bt.add_parser("compare")
-    bc.add_argument("--runs", nargs="+", required=True)
+    bc.add_argument("--runs", nargs="+", required=True, help="first run is the reference")
+    bc.add_argument("--stats", action="store_true", help="Sharpe-difference tests and deflated Sharpe")
+    bc.add_argument("--trials", type=int, default=None,
+                    help="number of configurations really tried (for the deflated Sharpe); default = runs compared")
+    bc.add_argument("--seed", type=int, default=0)
     bc.set_defaults(func=cmd_backtest_compare)
 
     rp = sub.add_parser("report", help="exports").add_subparsers(dest="cmd", required=True)

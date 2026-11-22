@@ -7,6 +7,8 @@ claims mode=LIVE is rejected.
 
 from __future__ import annotations
 
+import hmac
+import os
 import time
 from typing import Any, Literal
 
@@ -54,6 +56,18 @@ class IngestRequest(BaseModel):
     seed: int = 7
 
 
+class RefreshRequest(BaseModel):
+    snapshot_id: str = "latest"
+    end: str | None = None
+
+
+class FXIngestRequest(BaseModel):
+    start: str
+    end: str | None = None
+    provider: Literal["yfinance", "synthetic"] = "synthetic"
+    seed: int = 7
+
+
 class DQ001Request(BaseModel):
     snapshot_id: str
     symbol: str = "SPY"
@@ -80,7 +94,9 @@ class PaperOrderRequest(BaseModel):
     side: Literal["BUY", "SELL"]
     quantity: int = Field(gt=0)
     client_order_id: str | None = Field(None, max_length=64)
-    order_type: str = "MARKET"
+    order_type: Literal["MARKET", "LIMIT"] = "MARKET"
+    limit_price: str | None = None
+    time_in_force: Literal["DAY", "GTC"] = "GTC"
     mode: str = "PAPER"
 
 
@@ -89,10 +105,36 @@ class PaperAdvanceRequest(BaseModel):
     sessions: int = Field(1, ge=1, le=2520)
 
 
+class AutopilotAttachRequest(BaseModel):
+    account_id: str
+    strategy: str
+    symbols: list[str] = Field(min_length=1)
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class AutopilotRunRequest(BaseModel):
+    account_id: str
+    sessions: int = Field(1, ge=1, le=5000)
+
+
 class KillSwitchRequest(BaseModel):
     account_id: str
     active: bool
     reason: str = ""
+
+
+class WalkForwardRequest(BaseModel):
+    snapshot_id: str
+    strategy: str
+    symbols: list[str] = Field(default_factory=lambda: ["SPY"], min_length=1)
+    param_grid: dict[str, list[Any]] = Field(default_factory=dict)
+    train_sessions: int = Field(756, ge=60)
+    test_sessions: int = Field(252, ge=20)
+    embargo_sessions: int = Field(0, ge=0)
+    expanding: bool = True
+    objective: Literal["sharpe", "cagr", "total_return", "calmar"] = "sharpe"
+    commission_bps: float = Field(1.0, ge=0)
+    slippage_bps: float = Field(2.0, ge=0)
 
 
 class AIRequest(BaseModel):
@@ -126,13 +168,32 @@ def reject_live(mode: str) -> None:
         raise InputValidationError(f"unknown mode {mode!r}")
 
 
-def create_app(data_dir: str | None = None, ctx: AppContext | None = None) -> FastAPI:
+PUBLIC_PATHS = {"/health", "/docs", "/openapi.json", "/docs/oauth2-redirect", "/redoc"}
+
+
+def create_app(data_dir: str | None = None, ctx: AppContext | None = None, api_token: str | None = None) -> FastAPI:
+    """Build the app. If ``api_token`` (or env ``QUANTLAB_API_TOKEN``) is set, every non-public
+    endpoint requires ``Authorization: Bearer <token>``. Without a token the API is meant for
+    127.0.0.1 only (the default bind address)."""
     ctx = ctx or build_context(data_dir)
+    token = api_token if api_token is not None else os.environ.get("QUANTLAB_API_TOKEN", "").strip()
     jobs = JobRunner(ctx)
     app = FastAPI(title="QuantLab API", version=quantlab.__version__,
                   description="Local research/backtest/paper API. No live trading.")
     app.state.ctx = ctx
     app.state.jobs = jobs
+    app.state.auth_required = bool(token)
+
+    @app.middleware("http")
+    async def _auth(request: Request, call_next):
+        if token and request.url.path not in PUBLIC_PATHS:
+            header = request.headers.get("authorization", "")
+            given = header[7:] if header.lower().startswith("bearer ") else ""
+            if not hmac.compare_digest(given.encode(), token.encode()):
+                return JSONResponse(status_code=401, content={"error": "Unauthorized",
+                                                              "detail": "missing or invalid bearer token",
+                                                              "meta": _meta()})
+        return await call_next(request)
 
     status_map = {
         InputValidationError: 422,
@@ -153,7 +214,7 @@ def create_app(data_dir: str | None = None, ctx: AppContext | None = None) -> Fa
     @app.get("/health")
     def health():
         ctx.db.query_one("SELECT 1 AS ok")
-        return envelope({"status": "ok", "db": str(ctx.settings.db_path)}, mode="SYSTEM")
+        return envelope({"status": "ok", "auth_required": bool(token)}, mode="SYSTEM")
 
     @app.get("/assets")
     def assets():
@@ -175,6 +236,38 @@ def create_app(data_dir: str | None = None, ctx: AppContext | None = None) -> Fa
             return res.snapshot.id
 
         jid = jobs.submit("data.ingest", req.model_dump(), work)
+        return envelope({"job_id": jid, "status": "PENDING"}, mode="RESEARCH", source=req.provider)
+
+    @app.post("/data/refresh", status_code=202)
+    def data_refresh(req: RefreshRequest):
+        from quantlab.data.providers import YFinanceProvider
+        from quantlab.data.refresh import refresh_snapshot
+
+        if req.snapshot_id != "latest":
+            ctx.snapshots.get(req.snapshot_id)
+
+        def work():
+            return refresh_snapshot(ctx, req.snapshot_id, YFinanceProvider(), req.end).new_snapshot_id
+
+        jid = jobs.submit("data.refresh", req.model_dump(), work)
+        return envelope({"job_id": jid, "status": "PENDING"}, mode="RESEARCH", source="yfinance")
+
+    @app.get("/data/lineage")
+    def data_lineage(snapshot_id: str | None = None):
+        from quantlab.data.refresh import lineage
+
+        return envelope(lineage(ctx, snapshot_id), mode="RESEARCH")
+
+    @app.post("/data/fx/ingest", status_code=202)
+    def fx_ingest(req: FXIngestRequest):
+        from quantlab.data.fx import ingest_fx
+
+        validate_date_range(req.start, req.end, allow_future=req.provider == "synthetic")
+
+        def work():
+            return ingest_fx(ctx, req.start, req.end, synthetic=req.provider == "synthetic", seed=req.seed)[0].id
+
+        jid = jobs.submit("data.ingest_fx", req.model_dump(), work)
         return envelope({"job_id": jid, "status": "PENDING"}, mode="RESEARCH", source=req.provider)
 
     @app.get("/data/snapshots")
@@ -225,6 +318,15 @@ def create_app(data_dir: str | None = None, ctx: AppContext | None = None) -> Fa
                                    "failure_reason")} for r in list_runs(ctx)]
         return envelope(rows, mode="BACKTEST")
 
+    @app.get("/backtests/compare")
+    def backtests_compare(run_ids: str, n_trials: int | None = None, seed: int = 0):
+        from quantlab.backtest.service import compare_runs
+
+        t0 = time.perf_counter()
+        ids = [x for x in run_ids.split(",") if x.strip()]
+        out = compare_runs(ctx, ids, n_trials, seed)
+        return envelope(out, t0, mode="BACKTEST", label=BACKTEST_LABEL, data_label=out["data_label"])
+
     @app.get("/backtests/{run_id}")
     def backtest(run_id: str):
         r = get_run(ctx, run_id)
@@ -234,6 +336,14 @@ def create_app(data_dir: str | None = None, ctx: AppContext | None = None) -> Fa
             mode="BACKTEST", run_id=r["id"], label=BACKTEST_LABEL,
             data_label=res.get("data_label"), assumptions=res.get("assumptions"),
         )
+
+    @app.get("/backtests/{run_id}/metrics")
+    def backtest_metrics(run_id: str, currency: str = "USD"):
+        from quantlab.backtest.service import metrics_in_currency
+
+        out = metrics_in_currency(ctx, run_id, currency)
+        out.pop("_curves", None)
+        return envelope(out, mode="BACKTEST", run_id=run_id, label=BACKTEST_LABEL)
 
     @app.get("/backtests/{run_id}/trades")
     def backtest_trades(run_id: str):
@@ -264,6 +374,24 @@ def create_app(data_dir: str | None = None, ctx: AppContext | None = None) -> Fa
             return eid
 
         jid = jobs.submit("experiment.dq001", req.model_dump(), work)
+        return envelope({"job_id": jid, "experiment_id": eid, "status": "PENDING"}, mode="RESEARCH",
+                        data_label=data_label(snap.is_synthetic))
+
+    @app.post("/experiments/walk-forward", status_code=202)
+    def create_walk_forward(req: WalkForwardRequest):
+        from quantlab.core.ids import new_id
+        from quantlab.research.walk_forward import WalkForwardConfig, run_walk_forward
+
+        snap = ctx.snapshots.get(req.snapshot_id)
+        cfg = WalkForwardConfig(snapshot_id=snap.id, **req.model_dump(exclude={"snapshot_id"}))
+        cfg.validate()
+        eid = new_id()
+
+        def work():
+            run_walk_forward(ctx, cfg, experiment_id=eid)
+            return eid
+
+        jid = jobs.submit("experiment.walk_forward", req.model_dump(), work)
         return envelope({"job_id": jid, "experiment_id": eid, "status": "PENDING"}, mode="RESEARCH",
                         data_label=data_label(snap.is_synthetic))
 
@@ -303,7 +431,8 @@ def create_app(data_dir: str | None = None, ctx: AppContext | None = None) -> Fa
     def paper_order(req: PaperOrderRequest):
         reject_live(req.mode)
         o = broker.submit_order(req.account_id, req.symbol, req.side, req.quantity, req.client_order_id,
-                                req.order_type, actor="api", mode=req.mode)
+                                req.order_type, actor="api", mode=req.mode, limit_price=req.limit_price,
+                                time_in_force=req.time_in_force)
         return envelope(o, mode="PAPER", label=REPLAY_LABEL)
 
     @app.get("/paper/orders")
@@ -320,6 +449,29 @@ def create_app(data_dir: str | None = None, ctx: AppContext | None = None) -> Fa
     @app.post("/paper/kill-switch")
     def paper_kill(req: KillSwitchRequest):
         return envelope(broker.set_kill_switch(req.account_id, req.active, req.reason), mode="PAPER")
+
+    @app.post("/paper/autopilot")
+    def autopilot_attach(req: AutopilotAttachRequest):
+        from quantlab.paper.autopilot import StrategyAutopilot
+
+        return envelope(StrategyAutopilot(ctx, broker).attach(req.account_id, req.strategy, req.symbols, req.params),
+                        mode="PAPER", label=REPLAY_LABEL)
+
+    @app.post("/paper/autopilot/run")
+    def autopilot_run(req: AutopilotRunRequest):
+        from quantlab.paper.autopilot import StrategyAutopilot
+
+        t0 = time.perf_counter()
+        return envelope(StrategyAutopilot(ctx, broker).run(req.account_id, req.sessions), t0, mode="PAPER",
+                        label=REPLAY_LABEL)
+
+    @app.get("/paper/autopilot/compare")
+    def autopilot_compare(account_id: str):
+        from quantlab.paper.compare import paper_vs_backtest
+
+        r = paper_vs_backtest(ctx, account_id)
+        r.pop("_series")
+        return envelope(r, mode="PAPER", label=REPLAY_LABEL)
 
     @app.get("/risk/events")
     def risk_events(account_id: str | None = None):

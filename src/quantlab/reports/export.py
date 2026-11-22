@@ -58,7 +58,7 @@ def df_to_markdown(df: pd.DataFrame) -> str:
 
 
 def metrics_table(metrics: dict[str, Any]) -> pd.DataFrame:
-    cols = {k: metrics.get(k) for k in ("net", "gross", "benchmark") if metrics.get(k)}
+    cols: dict[str, dict[str, Any]] = {k: metrics[k] for k in ("net", "gross", "benchmark") if metrics.get(k)}
     rows = []
     for key, label, kind in METRIC_ROWS:
         rows.append({"metric": label, **{c: fmt(m.get(key), kind) for c, m in cols.items()}})
@@ -236,7 +236,7 @@ def experiment_html(exp: dict[str, Any]) -> str:
     r = exp["results"]
     agg = pd.DataFrame(r["aggregate"])
     agg = agg[agg.scenario != "clean"].copy()
-    figs = []
+    figs: list[str] = []
     for sid, g in agg.groupby("strategy", sort=False):
         g = g.assign(err=(g["delta_total_return_ci_high"] - g["delta_total_return_mean"]).fillna(0) * 100,
                      y=g["delta_total_return_mean"] * 100)
@@ -252,6 +252,56 @@ def experiment_html(exp: dict[str, Any]) -> str:
 color:#222;background:#FAF8F4}} .banner{{background:#7A2E2E;color:#fff;padding:8px 12px;border-radius:4px}}
 pre{{white-space:pre-wrap;background:#fff;padding:12px}}</style></head><body>{banner}
 <h1>{r['code']} data-quality experiment</h1>{''.join(figs)}<pre>{html.escape(md)}</pre></body></html>"""
+
+
+def walkforward_markdown(exp: dict[str, Any]) -> str:
+    r = exp["results"]
+    cfg = r["design"]["config"]
+    lines = [f"# Walk-forward validation — {r['strategy']} ({', '.join(r['symbols'])})", "", f"**{r['label']}**  "]
+    if r["is_synthetic"]:
+        lines.append(f"**{SYNTHETIC_LABEL}**  ")
+    lines += [f"_{NOT_ADVICE}_", "", "## Design", "",
+              f"- Experiment ID: `{r['experiment_id']}` · code version `{r['design'].get('code_version')}`",
+              f"- Snapshot `{r['design']['snapshot']['id']}` (hash `{r['design']['snapshot']['dataset_hash']}`)",
+              f"- Train {cfg['train_sessions']} sessions ({'expanding' if cfg['expanding'] else 'rolling'}), test "
+              f"{cfg['test_sessions']} sessions, embargo {cfg['embargo_sessions']}",
+              f"- Objective: {r['objective']} · selection rule: {r['design']['selection_rule']}",
+              f"- Parameter grid ({r['n_configs']} valid sets): `{json.dumps(cfg['param_grid'])}`",
+              f"- Costs: commission {cfg['commission_bps']} bps, slippage {cfg['slippage_bps']} bps",
+              "", "## Out-of-sample metrics (stitched test windows)", ""]
+    m, b = r["oos_metrics"], r.get("benchmark_metrics") or {}
+    rows = [{"metric": label, "out-of-sample": fmt(m.get(k), kind),
+             "benchmark": fmt(b.get(k), kind) if b else "n/a"} for k, label, kind in METRIC_ROWS]
+    lines.append(df_to_markdown(pd.DataFrame(rows)))
+    lines += ["", "## Folds", ""]
+    fr = pd.DataFrame([{"fold": f["fold"], "train": f"{f['train_start']}→{f['train_end']}",
+                        "test": f"{f['test_start']}→{f['test_end']}", "chosen": json.dumps(f["chosen_params"]),
+                        f"train {r['objective']}": fmt(f["train_objective"], "num"),
+                        f"test {r['objective']}": fmt(f["test_objective"], "num"),
+                        "test return": fmt(f["test_total_return"], "pct"),
+                        "OOS rank": fmt(f["oos_percentile_rank"], "num")} for f in r["folds"]])
+    lines.append(df_to_markdown(fr))
+    lines += ["", "## Findings (generated from the numbers above)", ""] + [f"- {x}" for x in r["findings"]]
+    lines += ["", "## Assumptions", ""] + [f"- {x}" for x in r["assumptions"]]
+    return "\n".join(lines) + "\n"
+
+
+def walkforward_html(exp: dict[str, Any], oos: pd.Series, bench: pd.Series | None) -> str:
+    r = exp["results"]
+    curves = {"out-of-sample (chosen params)": oos}
+    if bench is not None:
+        curves["benchmark buy & hold"] = bench
+    fig = charts.equity_and_drawdown(curves, r["is_synthetic"], f"Walk-forward {r['strategy']} — out-of-sample equity")
+    banner = f"<div class='banner'>{html.escape(r['label'])}"
+    if r["is_synthetic"]:
+        banner += f" · <b>{html.escape(SYNTHETIC_LABEL)}</b>"
+    banner += "</div>"
+    return f"""<!DOCTYPE html><html><head><meta charset='utf-8'><title>Walk-forward {r['experiment_id']}</title>
+<style>body{{font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;max-width:1100px;margin:24px auto;
+color:#222;background:#FAF8F4}} .banner{{background:#7A2E2E;color:#fff;padding:8px 12px;border-radius:4px}}
+pre{{white-space:pre-wrap;background:#fff;padding:12px}}</style></head><body>{banner}
+<h1>Walk-forward validation</h1>{fig.to_html(full_html=False, include_plotlyjs=True)}
+<pre>{html.escape(walkforward_markdown(exp))}</pre></body></html>"""
 
 
 def export_experiment(ctx: AppContext, experiment_id: str, fmt_: str, out_dir: str | Path | None = None) -> list[Path]:
@@ -272,6 +322,14 @@ def export_experiment(ctx: AppContext, experiment_id: str, fmt_: str, out_dir: s
         p = out / f"{tag}result.json"
         p.write_text(json.dumps(r, indent=2, sort_keys=True))
         paths.append(p)
+    elif fmt_ == "csv" and exp["code"] == "WALK-FORWARD":
+        folder = Path(exp["artifact_uri"])
+        for name, df in (("folds", pd.read_csv(folder / "folds.csv")),
+                         ("grid_results", pd.read_csv(folder / "grid_results.csv")),
+                         ("oos_equity", pd.read_parquet(folder / "oos_equity.parquet"))):
+            p = out / f"{tag}{name}.csv"
+            p.write_text(header + df.to_csv(index=False))
+            paths.append(p)
     elif fmt_ == "csv":
         for name, df in (("runs", experiment_runs(ctx, exp["id"])), ("aggregate", pd.DataFrame(r["aggregate"])),
                          ("policy_comparison", pd.DataFrame(r["policy_comparison"]))):
@@ -280,10 +338,22 @@ def export_experiment(ctx: AppContext, experiment_id: str, fmt_: str, out_dir: s
             paths.append(p)
     elif fmt_ == "md":
         p = out / f"{tag}report.md"
-        p.write_text(experiment_markdown(exp))
+        p.write_text(walkforward_markdown(exp) if exp["code"] == "WALK-FORWARD" else experiment_markdown(exp))
         paths.append(p)
     else:
         p = out / f"{tag}report.html"
-        p.write_text(experiment_html(exp))
+        if exp["code"] == "WALK-FORWARD":
+            oos, bench = load_walkforward_curves(exp)
+            p.write_text(walkforward_html(exp, oos, bench))
+        else:
+            p.write_text(experiment_html(exp))
         paths.append(p)
     return paths
+
+
+def load_walkforward_curves(exp: dict[str, Any]) -> tuple[pd.Series, pd.Series | None]:
+    folder = Path(exp["artifact_uri"])
+    oos = pd.read_parquet(folder / "oos_equity.parquet").set_index("session")["nav"]
+    bp = folder / "benchmark_equity.parquet"
+    bench = pd.read_parquet(bp).set_index("session")["nav"] if bp.exists() else None
+    return oos, bench

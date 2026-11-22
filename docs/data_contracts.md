@@ -16,6 +16,14 @@
 `price_basis`: `split_adjusted` (Yahoo OHLC — splits already applied, dividends not) or
 `unadjusted` (as traded; synthetic fixture). Invariant checked: `low ≤ open, close ≤ high`.
 
+## Provider cleanup (yfinance)
+Applied before hashing, and every change is listed in the snapshot's `parameters.provider_cleanup`:
+- bars for sessions that have not closed yet are dropped (an intraday download would otherwise store a partial bar);
+- action-only rows (dividend/split without prices) are merged into their session's row; when dated on a
+  non-session day they move to the next XNYS session (the effective ex-date);
+- rows with neither prices nor actions are dropped; exact duplicates are collapsed;
+- conflicting duplicates are **kept**, so validation flags them as ERROR (never silently resolved).
+
 ## Snapshot
 `id` (UUIDv5 of content key), `dataset_hash` = `<sha256>:<price_basis>:<is_synthetic>`,
 `provider`, `parameters` (symbols, dates, seed…), `retrieved_at` (UTC), `symbols`, `start`, `end`,

@@ -5,7 +5,14 @@ import pandas as pd
 import streamlit as st
 
 from quantlab.backtest.engine import BacktestConfig
-from quantlab.backtest.service import get_run, list_runs, load_artifact, run_and_store
+from quantlab.backtest.service import (
+    compare_runs,
+    get_run,
+    list_runs,
+    load_artifact,
+    metrics_in_currency,
+    run_and_store,
+)
 from quantlab.core.errors import QuantLabError
 from quantlab.reports import charts
 from quantlab.reports.export import backtest_html, backtest_markdown, metrics_table
@@ -95,7 +102,22 @@ with tab_results:
         st.plotly_chart(charts.equity_and_drawdown(curves, res["is_synthetic"]), width="stretch")
 
         st.subheader("Metrics")
-        st.dataframe(metrics_table(res["metrics"]), hide_index=True, width="stretch")
+        cur = st.radio("Reporting currency", ["USD", "CAD"], horizontal=True, key="bl_cur",
+                       help="CAD = unhedged Canadian-investor view: NAV_USD x USDCAD. Trading stays in USD.")
+        if cur == "CAD":
+            try:
+                mc = metrics_in_currency(ctx, rid, "CAD")
+                curves_cad = {f"{k} (CAD)": v for k, v in mc.pop("_curves").items()}
+                st.plotly_chart(charts.equity_and_drawdown(curves_cad, res["is_synthetic"], "Equity in CAD"),
+                                width="stretch")
+                st.dataframe(metrics_table(mc["metrics"]), hide_index=True, width="stretch")
+                st.caption(f"{mc['note']} FX snapshot {mc['fx']['snapshot_id'][:8]} · "
+                           f"{mc['fx']['stale_rate_sessions']} session(s) used the previous rate. "
+                           "Cost/turnover/dividend rows are USD-only and shown as n/a.")
+            except QuantLabError as exc:
+                st.info(f"CAD view unavailable: {exc}")
+        else:
+            st.dataframe(metrics_table(res["metrics"]), hide_index=True, width="stretch")
         if res["metrics"].get("relative"):
             st.json(res["metrics"]["relative"])
         trades = load_artifact(ctx, rid, "trades")
@@ -147,4 +169,16 @@ with tab_compare:
             backtest_banner(True in synth)
             st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
             st.caption("Overlapping Sharpe confidence intervals mean the difference is not statistically distinguishable.")
+            st.subheader("Statistical tests (first selected run = reference)")
+            trials = st.number_input("Configurations really tried (for the deflated Sharpe)", min_value=len(chosen),
+                                     value=len(chosen), step=1, key="bl_trials")
+            try:
+                stt = compare_runs(ctx, [labels[k] for k in chosen], int(trials))
+                pw = pd.DataFrame(stt["pairwise"])
+                st.dataframe(pw, hide_index=True, width="stretch")
+                st.dataframe(pd.DataFrame(stt["deflated_sharpe"]).T.reset_index(names="run"), hide_index=True,
+                             width="stretch")
+                st.caption(" ".join(stt["notes"]) + (" " + " ".join(stt["warnings"]) if stt["warnings"] else ""))
+            except QuantLabError as exc:
+                st.info(f"Statistical tests unavailable: {exc}")
             st.plotly_chart(charts.equity_and_drawdown(curves, True in synth, "Comparison"), width="stretch")

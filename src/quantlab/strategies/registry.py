@@ -8,12 +8,14 @@ from quantlab.strategies.buy_hold import BuyAndHold, BuyHoldParams
 from quantlab.strategies.momentum import CrossSectionalMomentum, MomentumParams
 from quantlab.strategies.rsi_mean_reversion import RSIMeanReversion, RSIParams
 from quantlab.strategies.sma_crossover import SMACrossover, SMAParams
+from quantlab.strategies.vol_target import VolatilityTarget, VolTargetParams
 
 STRATEGIES: dict[str, tuple[type[Strategy], type]] = {
     BuyAndHold.id: (BuyAndHold, BuyHoldParams),
     SMACrossover.id: (SMACrossover, SMAParams),
     RSIMeanReversion.id: (RSIMeanReversion, RSIParams),
     CrossSectionalMomentum.id: (CrossSectionalMomentum, MomentumParams),
+    VolatilityTarget.id: (VolatilityTarget, VolTargetParams),
 }
 ALIASES = {
     "buy_hold": "buy-hold",
@@ -24,6 +26,8 @@ ALIASES = {
     "rsi": "rsi-mean-reversion",
     "rsi_mean_reversion": "rsi-mean-reversion",
     "mean-reversion": "rsi-mean-reversion",
+    "vol_target": "vol-target",
+    "volatility-target": "vol-target",
 }
 
 

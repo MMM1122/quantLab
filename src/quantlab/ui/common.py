@@ -48,8 +48,9 @@ def snapshot_label(s: DataSnapshot, quality: str | None = None) -> str:
 
 
 def snapshot_selector(ctx: AppContext, key: str, include_derived: bool = False,
-                      require_tradable: bool = False) -> DataSnapshot | None:
-    snaps = ctx.snapshots.list(include_derived=include_derived)
+                      require_tradable: bool = False, include_fx: bool = False) -> DataSnapshot | None:
+    snaps = [s for s in ctx.snapshots.list(include_derived=include_derived)
+             if include_fx or (s.parameters or {}).get("asset_class") != "fx"]
     if require_tradable:
         snaps = [s for s in snaps if ctx.snapshots.quality_status(s.id) != "FAILED"]
     if not snaps:

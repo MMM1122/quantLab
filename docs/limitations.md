@@ -13,18 +13,26 @@
 
 ## Modelling
 * Fill model = next open ± fixed slippage; no market impact, no queue position, no halts.
+* Paper LIMIT orders on daily bars: filled at the open if it is better than the limit, otherwise at
+  the limit only if the bar trades *through* it (touching is not a fill); intraday path unknown.
+* Walk-forward: each test fold starts in cash (re-entry cost at fold boundaries); sessions after
+  the last full test fold are unused; grids are capped at 200 parameter sets.
 * Backtests have no volume cap; paper trading caps fills at 10% of session volume.
+* Paper cash checks do not count proceeds of pending sells, so an autopilot rotation can buy one session
+  later than the backtest (reported in the paper-vs-backtest explanations).
 * Dividends credited on the ex-date (pay date ignored) and held as cash (not reinvested).
 * Yahoo prices are split-adjusted retroactively; true as-traded prices are not available from it.
 * ETF-only universe reduces but does not remove survivorship/selection bias.
-* No taxes, borrow, FX (USD only; CAD conversion is future work), or account fees.
+* No taxes, borrow or account fees. Trading and costs are in USD; CAD is a reporting view only
+  (NAV_CAD = NAV_USD × USDCAD at the session's rate, previous rate for ≤ 5 sessions; no FX conversion
+  costs, no hedging). Cost/turnover/dividend amounts are not converted.
 * Sharpe CI uses an iid approximation; DQ-001 uses few seeds → wide intervals.
 * Synthetic fixture = GBM with fat-tail shocks; it has no real market structure, so strategy
   results on it are meaningless as evidence of profitability.
 
 ## Product scope not implemented (V1)
 * FastAPI auth (local single user only), PostgreSQL/Alembic migrations (SQLite schema is
-  versioned via `PRAGMA user_version`), Next.js UI, walk-forward optimisation UI, LIMIT orders,
+  versioned via `PRAGMA user_version` with forward migrations), Next.js UI, stop orders,
   broker adapters (IBKR etc.), live trading, scheduler for automatic daily ingestion.
 
 ## Tested versions

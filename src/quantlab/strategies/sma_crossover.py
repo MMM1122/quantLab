@@ -17,6 +17,7 @@ class SMAParams(StrategyParams):
 
 
 class SMACrossover(Strategy):
+    params: SMAParams
     id = "sma-crossover"
     name = "SMA Crossover"
     version = "1.0.0"

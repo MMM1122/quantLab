@@ -1,0 +1,44 @@
+# Local/self-hosted deployment: dashboard + API sharing one persistent data volume.
+# Ports are bound to 127.0.0.1 by default. Expose them publicly only behind a reverse proxy with
+# authentication (Streamlit has no login) and with QUANTLAB_API_TOKEN set for the API.
+services:
+  dashboard:
+    build:
+      context: .
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+    image: quantlab:latest
+    ports:
+      - "127.0.0.1:8501:8501"
+    volumes:
+      - quantlab-data:/data
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      LIVE_TRADING_ENABLED: "false"
+    restart: unless-stopped
+
+  api:
+    image: quantlab:latest
+    depends_on:
+      - dashboard
+    command: ["uvicorn", "quantlab.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - quantlab-data:/data
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      LIVE_TRADING_ENABLED: "false"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  quantlab-data:

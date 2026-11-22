@@ -2,7 +2,7 @@ PY ?= python3
 VENV ?= .venv
 BIN = $(VENV)/bin
 
-.PHONY: install lint test smoke dashboard api acceptance clean-data
+.PHONY: install lint typecheck test smoke dashboard api acceptance clean-data
 
 install:
 	$(PY) -m venv $(VENV)
@@ -11,6 +11,9 @@ install:
 
 lint:
 	$(BIN)/ruff check .
+
+typecheck:
+	$(BIN)/mypy
 
 test:
 	$(BIN)/pytest -q

@@ -13,6 +13,7 @@ class BuyHoldParams(StrategyParams):
 
 
 class BuyAndHold(Strategy):
+    params: BuyHoldParams
     id = "buy-hold"
     name = "Buy & Hold"
     version = "1.0.0"

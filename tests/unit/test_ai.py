@@ -62,7 +62,8 @@ def test_ai_package_never_imports_order_code():
 def test_tools_are_read_only_at_database_level(runs):
     ctx, *_ = runs
     tools = ReadOnlyResearchTools(ctx.settings.db_path)
-    assert set(TOOL_NAMES) == {"get_backtest_facts", "compare_backtests", "get_experiment_facts", "list_recent_backtests"}
+    assert set(TOOL_NAMES) == {"get_backtest_facts", "compare_backtests", "compare_statistics", "get_experiment_facts",
+                               "list_recent_backtests"}
     con = tools._conn()
     with pytest.raises(sqlite3.OperationalError):
         con.execute("INSERT INTO orders(id) VALUES ('x')")
@@ -86,7 +87,8 @@ def test_deterministic_compare_and_experiment_summary(runs):
     ctx, snap, a, b = runs
     asst = ResearchAssistant(ctx.settings.db_path, provider=None)
     c = asst.compare([a, b])
-    assert c.verification["verified"] and "Highest point-estimate Sharpe" in c.text
+    assert c.verification["verified"], c.verification
+    assert "Highest point-estimate Sharpe" in c.text and "Jobson-Korkie" in c.text and "deflated" in c.text
     exp = run_dq001(ctx, DQ001Config(snapshot_id=snap.id, strategies=["sma-crossover"], seeds=[1, 2],
                                      scenarios=[Scenario("clean"), Scenario("missing_5pct", missing_rate=0.05)]))
     s = asst.summarize_experiment(exp["experiment_id"])
