@@ -42,11 +42,13 @@ def test_to_cad_as_of_rules():
 
 def test_yahoo_fx_aligns_to_xnys_sessions():
     days = pd.bdate_range("2024-07-01", "2024-07-10")  # includes 2024-07-04 (US holiday, FX trades)
-    raw = pd.DataFrame({"Open": 1.36, "High": 1.37, "Low": 1.35, "Close": 1.365},
+    # Yahoo stamps FX bars at London midnight (found on real CAD=X data): dates must not shift a day
+    raw = pd.DataFrame({"Open": 1.36, "High": 1.37, "Low": 1.35, "Close": np.arange(len(days)) + 1.30},
                        index=days.tz_localize("Europe/London"))
     bars = yahoo_fx("2024-07-01", "2024-07-10", downloader=lambda *a: raw)
-    assert pd.Timestamp("2024-07-04") not in set(bars.session_date)
-    assert set(bars.session_date) <= set(calendar.sessions("2024-07-01", "2024-07-10"))
+    assert list(bars.session_date) == list(calendar.sessions("2024-07-01", "2024-07-10"))  # every session, no gaps
+    monday = bars.loc[bars.session_date == pd.Timestamp("2024-07-08"), "close"].iloc[0]
+    assert monday == pytest.approx(1.30 + list(days).index(pd.Timestamp("2024-07-08")))  # Monday keeps Monday's rate
     assert (bars.source == "yfinance").all() and (bars.symbol == "USDCAD").all()
     with pytest.raises(DataUnavailableError):
         yahoo_fx("2024-07-01", "2024-07-10", downloader=lambda *a: pd.DataFrame())

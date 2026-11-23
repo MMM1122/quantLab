@@ -1,0 +1,65 @@
+name: Real-data acceptance
+
+# Runs the full acceptance test against REAL Yahoo Finance data (GitHub runners have internet).
+# Yahoo data is for personal research use; this job only downloads daily bars for 5 ETFs + USDCAD.
+# Triggers: manual (Actions tab → "Run workflow") and PRs that touch data code. No schedule.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/real-data.yml"
+      - "src/quantlab/data/**"
+      - "scripts/acceptance_test.py"
+
+jobs:
+  acceptance-real:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      LIVE_TRADING_ENABLED: "false"
+      QUANTLAB_LLM_PROVIDER: "none"
+    steps:
+      - name: Data directory
+        run: echo "QL_DATA=$RUNNER_TEMP/quantlab_real" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          pip install -e ".[dev]"
+      - name: Acceptance test on real data (no synthetic fallback)
+        run: python scripts/acceptance_test.py --require-real --data-dir "$QL_DATA"
+      - name: Real USDCAD, CAD metrics, refresh and data check
+        if: always()
+        run: |
+          set -x -o pipefail
+          quantlab --data-dir "$QL_DATA" data list > "$QL_DATA/exports/snapshots.json"
+          quantlab --data-dir "$QL_DATA" data ingest-fx --start 2015-01-01 | tee "$QL_DATA/exports/fx_ingest.json"
+          RUN=$(quantlab --data-dir "$QL_DATA" backtest list | python -c "import json,sys; print(json.load(sys.stdin)[0]['id'])")
+          quantlab --data-dir "$QL_DATA" backtest show --run "$RUN" --currency CAD | tee "$QL_DATA/exports/cad_metrics.json"
+          SNAP=$(python -c "import json; s=[x for x in json.load(open('$QL_DATA/exports/snapshots.json')) if not x['synthetic'] and not x['parent_id']]; print(s[0]['id'])")
+          quantlab --data-dir "$QL_DATA" data check --snapshot "$SNAP" | tee "$QL_DATA/exports/quality.json"
+          rc=0; quantlab --data-dir "$QL_DATA" data refresh --snapshot "$SNAP" > "$QL_DATA/exports/refresh.json" || rc=$?
+          cat "$QL_DATA/exports/refresh.json"
+          test "$rc" -eq 0 -o "$rc" -eq 5   # 5 = provider revisions detected (reported, not a failure)
+          python -c "import json,sys; q=json.load(open('$QL_DATA/exports/fx_ingest.json')); sys.exit(q['quality']['status']=='FAILED')"
+      - name: Job summary
+        if: always()
+        run: |
+          if [ -f "$QL_DATA/exports/acceptance_report.md" ]; then
+            head -c 60000 "$QL_DATA/exports/acceptance_report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "acceptance report not produced" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-data-acceptance
+          path: |
+            ${{ env.QL_DATA }}/exports/*.md
+            ${{ env.QL_DATA }}/exports/*.json
+          if-no-files-found: warn

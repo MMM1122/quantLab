@@ -67,7 +67,9 @@ def yahoo_fx(start: str, end: str, downloader: Callable[[str, str, str], pd.Data
         raise DataUnavailableError("USDCAD download returned no rows")
     idx = pd.DatetimeIndex(raw.index)
     if idx.tz is not None:
-        idx = idx.tz_convert("America/New_York").tz_localize(None)
+        # Yahoo stamps FX daily bars at midnight in the market's own zone (e.g. Europe/London). Converting
+        # to New York would shift every date back by one day, so take the provider's local calendar date.
+        idx = idx.tz_localize(None)
     idx = idx.normalize()
     df = pd.DataFrame({"o": raw["Open"].to_numpy(float), "h": raw["High"].to_numpy(float),
                        "l": raw["Low"].to_numpy(float), "c": raw["Close"].to_numpy(float)}, index=idx)
@@ -124,10 +126,12 @@ def ingest_fx(ctx: AppContext, start: str, end: str | None = None, synthetic: bo
 def latest_fx_snapshot(ctx: AppContext, synthetic: bool, start: str | None = None,
                        end: str | None = None) -> DataSnapshot:
     """Most recent valid FX snapshot of the same realness that covers [start, end]."""
+    failed = []
     for s in ctx.snapshots.list(include_derived=False):
         if not (is_fx_snapshot(s) and s.is_synthetic == synthetic):
             continue
         if ctx.snapshots.quality_status(s.id) == "FAILED":
+            failed.append(s.id)
             continue
         if (start and pd.Timestamp(s.start) > pd.Timestamp(start)) or (end and pd.Timestamp(s.end) < pd.Timestamp(end)):
             continue
@@ -135,7 +139,9 @@ def latest_fx_snapshot(ctx: AppContext, synthetic: bool, start: str | None = Non
     kind = "synthetic" if synthetic else "real"
     hint = " --fixture synthetic" if synthetic else ""
     span = f" covering {start} → {end}" if start and end else ""
-    raise NotFoundError(f"no {kind} USDCAD snapshot{span}; run `quantlab data ingest-fx --start <date>{hint}`")
+    why = (f" ({len(failed)} {kind} FX snapshot(s) exist but failed quality checks, e.g. {failed[0][:8]}; "
+           "see `quantlab data check`)") if failed else ""
+    raise NotFoundError(f"no usable {kind} USDCAD snapshot{span}{why}; run `quantlab data ingest-fx --start <date>{hint}`")
 
 
 def fx_series(ctx: AppContext, snapshot_id: str) -> pd.Series:

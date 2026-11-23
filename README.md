@@ -143,6 +143,8 @@ pytest -q                            # 170 unit + integration tests (offline)
 bash scripts/smoke_test.sh           # lint + tests + CLI flow + API/Streamlit health
 python scripts/acceptance_test.py    # full end-to-end acceptance incl. restart persistence
 python scripts/acceptance_test.py --offline   # skip the yfinance attempt
+python scripts/acceptance_test.py --require-real   # fail instead of falling back to synthetic data
+# On GitHub: Actions → "Real-data acceptance" → Run workflow (real Yahoo data on GitHub runners)
 ```
 
 ## Layout
